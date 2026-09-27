@@ -1,0 +1,136 @@
+Panels:
+  - Class: rviz/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.5
+      Cell Size: 1
+      Class: rviz/Grid
+      Color: 160; 160; 164
+      Enabled: true
+      Name: Grid
+      Plane: XY
+      Plane Cell Count: 20
+    - Alpha: 1
+      Autocompute Intensity Bounds: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz/PointCloud2
+      Color Transformer: Intensity
+      Decay Time: 0
+      Enabled: true
+      Name: Body Cloud
+      Position Transformer: XYZ
+      Selectable: true
+      Size (Pixels): 2
+      Style: Points
+      Topic: /fastlio2/body_cloud
+    - Alpha: 1
+      Class: rviz/PointCloud2
+      Color: 200; 200; 200
+      Color Transformer: FlatColor
+      Decay Time: 0
+      Enabled: true
+      Name: Map Cloud
+      Position Transformer: XYZ
+      Selectable: true
+      Size (Pixels): 1
+      Style: Points
+      Topic: /localizer/map_cloud
+    - Alpha: 0.7
+      Class: rviz/Map
+      Color Scheme: map
+      Draw Behind: true
+      Enabled: true
+      Name: Static Grid Map
+      Topic: /astar_planner_node/map
+    - Alpha: 0.35
+      Class: rviz/Map
+      Color Scheme: map
+      Draw Behind: true
+      Enabled: true
+      Name: Inflated Costmap
+      Topic: /astar_planner_node/costmap
+    - Class: rviz/Path
+      Color: 0; 180; 255
+      Enabled: true
+      Line Style: Lines
+      Line Width: 0.03
+      Name: AStar Service Path
+      Topic: /astar_planner_node/visual_plan
+    - Class: rviz/Path
+      Color: 0; 255; 80
+      Enabled: true
+      Line Style: Lines
+      Line Width: 0.04
+      Name: Local Planner Path
+      Topic: /local_planner/global_plan
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Name: Observed and Remembered Obstacles
+      Marker Topic: /dynamic_obstacles_markers
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Name: Vehicle Collision Prediction
+      Marker Topic: /local_planner/collision_check
+    - Class: rviz/Marker
+      Color: 26; 255; 26
+      Enabled: true
+      Lifetime: 0
+      Name: Desired Motion Direction
+      Namespaces: 
+        desired_motion: true
+      Marker Topic: /local_planner/desired_direction
+    - Class: rviz/Axes
+      Enabled: true
+      Length: 0.4
+      Name: Base Link Axes
+      Radius: 0.03
+      Reference Frame: base_link
+    - Alpha: 1
+      Axes Length: 0.6
+      Axes Radius: 0.05
+      Class: rviz/Pose
+      Color: 255; 80; 40
+      Enabled: true
+      Head Length: 0.25
+      Head Radius: 0.12
+      Name: Localized Body Pose
+      Shaft Length: 0.7
+      Shaft Radius: 0.06
+      Shape: Arrow
+      Topic: /localizer/pose
+    - Class: rviz/Axes
+      Enabled: true
+      Length: 1
+      Name: Map Axes
+      Radius: 0.1
+      Reference Frame: map
+    - Class: rviz/Axes
+      Enabled: true
+      Length: 0.5
+      Name: Body Axes
+      Radius: 0.05
+      Reference Frame: body
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: map
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz/Interact
+    - Class: rviz/MoveCamera
+    - Class: rviz/Select
+    - Class: rviz/FocusCamera
+    - Class: rviz/SetGoal
+      Topic: /move_base_simple/goal
+  Views:
+    Current:
+      Class: rviz/Orbit
+      Distance: 30
+      Name: Current View
+      Pitch: 1.2
+      Target Frame: <Fixed Frame>
+      Yaw: 5.2

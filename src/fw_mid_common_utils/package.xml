@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>fw_mid_common_utils</name>
+  <version>0.1.0</version>
+  <description>ROS-independent geometry utilities for the FW-mid navigation stack.</description>
+  <maintainer email="robot@todo.todo">robot</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+</package>

@@ -1,0 +1,20 @@
+# ROS / catkin generated files
+build/
+devel/
+install/
+log/
+.ros/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# ROS runtime data
+*.bag
+*.db3
+
+# Editor / system files
+.vscode/
+.idea/
+.DS_Store

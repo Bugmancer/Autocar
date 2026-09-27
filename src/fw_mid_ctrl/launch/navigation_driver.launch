@@ -1,0 +1,27 @@
+<launch>
+  <arg name="start_can" default="true" />
+  <arg name="can_interface" default="can0" />
+  <arg name="max_vx" default="0.30" />
+  <arg name="max_vy" default="0.00" />
+  <arg name="max_wz" default="30.0" />
+  <arg name="cmd_timeout" default="0.5" />
+
+  <include if="$(arg start_can)" file="$(find fw_mid_ctrl)/launch/driver.launch">
+    <arg name="can_interface" value="$(arg can_interface)" />
+    <arg name="max_vx" value="$(arg max_vx)" />
+    <arg name="max_vy" value="$(arg max_vy)" />
+    <arg name="max_wz" value="$(arg max_wz)" />
+    <arg name="cmd_timeout" value="$(arg cmd_timeout)" />
+  </include>
+
+  <node pkg="fw_mid_ctrl"
+        type="cmd_vel_to_command_node.py"
+        name="cmd_vel_to_command"
+        output="screen">
+    <param name="max_vx" value="$(arg max_vx)" />
+    <param name="max_vy" value="$(arg max_vy)" />
+    <param name="max_wz_deg" value="$(arg max_wz)" />
+    <param name="cmd_timeout" value="$(arg cmd_timeout)" />
+    <param name="publish_rate" value="20.0" />
+  </node>
+</launch>

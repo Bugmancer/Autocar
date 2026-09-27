@@ -1,0 +1,24 @@
+<launch>
+  <arg name="config_path" default="$(find fw_mid_localizer)/config/localizer.yaml" />
+  <arg name="start_lio" default="false" />
+  <arg name="rviz" default="false" />
+  <arg name="print_pose" default="false" />
+  <!-- Project laboratory map; override for another map pair or refined seed. -->
+  <arg name="map_pcd" default="$(find fw_mid_localizer)/maps/underground/map.pcd" />
+  <arg name="initial_pose" default="[0,0,0,0,0,0]" />
+
+  <include if="$(arg start_lio)" file="$(find fw_mid_fastlio2)/launch/lio.launch" />
+
+  <group ns="localizer">
+    <node pkg="fw_mid_localizer" type="fw_mid_localizer_node"
+          name="localizer_node" output="screen" required="true">
+      <param name="config_path" value="$(arg config_path)" />
+      <param name="map_pcd" value="$(arg map_pcd)" />
+      <param name="print_pose" value="$(arg print_pose)" />
+      <rosparam param="initial_pose" subst_value="true">$(arg initial_pose)</rosparam>
+    </node>
+  </group>
+
+  <node if="$(arg rviz)" pkg="rviz" type="rviz" name="localizer_rviz"
+        args="-d $(find fw_mid_localizer)/rviz/localizer.rviz" />
+</launch>

@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>fw_mid_ctrl</name>
+  <version>0.0.0</version>
+  <description>FW-mid chassis ROS1 driver</description>
+  <maintainer email="robot@todo.todo">robot</maintainer>
+  <license>TODO</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+  <depend>geometry_msgs</depend>
+  <depend>rospy</depend>
+  <depend>std_msgs</depend>
+  <exec_depend>python3-setuptools</exec_depend>
+</package>

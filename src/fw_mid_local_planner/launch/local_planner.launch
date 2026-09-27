@@ -1,0 +1,33 @@
+<launch>
+  <arg name="config_file" default="$(find fw_mid_local_planner)/config/local_planner.yaml" />
+  <arg name="geometry_config" default="$(find fw_mid_common_utils)/config/collision_geometry.yaml" />
+  <arg name="publish_body_to_base_link_tf" default="true" />
+  <arg name="body_frame" default="body" />
+  <arg name="base_frame" default="base_link" />
+  <arg name="body_to_base_link" default="0.28991 0.0 -0.81317 0.0 -0.785398 0.0" />
+  <arg name="require_localization" default="false" />
+  <arg name="max_vx" default="0.30" />
+  <!-- Same units and limits as navigation_driver.launch: m/s and deg/s. -->
+  <arg name="max_wz" default="30.0" />
+
+  <!-- Source-project mounting values; verify against the vehicle calibration. -->
+  <group if="$(arg publish_body_to_base_link_tf)">
+    <node pkg="tf2_ros"
+          type="static_transform_publisher"
+          name="body_to_base_link_tf"
+          args="$(arg body_to_base_link) $(arg body_frame) $(arg base_frame)"
+          output="screen" />
+  </group>
+
+  <node pkg="fw_mid_local_planner"
+        type="path_follower_node.py"
+        name="path_follower_node"
+        output="screen">
+    <rosparam command="load" file="$(arg config_file)" />
+    <rosparam command="load" file="$(arg geometry_config)" />
+    <param name="robot_frame" value="$(arg base_frame)" />
+    <param name="require_localization" value="$(arg require_localization)" />
+    <param name="command_max_vx" value="$(arg max_vx)" />
+    <param name="command_max_wz_deg" value="$(arg max_wz)" />
+  </node>
+</launch>

@@ -1,0 +1,157 @@
+global_frame: map
+robot_frame: base_link
+planning_frame: base_link
+
+cmd_vel_topic: /cmd_vel
+desired_direction_topic: /local_planner/desired_direction
+plan_topic: /local_planner/global_plan
+planner_service: /astar_planner_node/get_plan
+goal_topic: /move_base_simple/goal
+legacy_goal_topic: /goal_pose
+costmap_topic: /astar_planner_node/costmap
+static_map_topic: /astar_planner_node/map
+
+control_rate: 10.0
+lookahead_distance: 0.50
+waypoint_tolerance: 0.25
+goal_tolerance: 0.35
+tracking_controller: pid
+
+path_enable_shortcut: true
+path_enable_smoothing: true
+path_resample_ds: 0.10
+path_smooth_weight_data: 0.20
+path_smooth_weight_smooth: 0.35
+path_smooth_max_iter: 80
+path_smooth_tolerance: 0.0001
+path_collision_check_step: 0.05
+path_occupied_threshold: 50
+
+pid_kp_yaw: 1.10
+pid_ki_yaw: 0.00
+pid_kd_yaw: 0.25
+pid_kp_lateral: 0.80
+pid_k_v: 0.55
+pid_ki_v: 0.00
+pid_kd_v: 0.00
+pid_min_vx: 0.04
+# Linear cruise speed and cap come from command_max_vx (launch max_vx).
+pid_max_wz: 0.22
+pid_yaw_deadband: 0.035
+pid_integral_limit: 0.40
+pid_slowdown_yaw: 1.00
+pid_stop_rotate_yaw: 1.75
+pid_approach_dist: 0.80
+pid_accel_limit_v: 0.25
+pid_accel_limit_wz: 0.30
+pid_deadband_v: 0.015
+pid_deadband_wz: 0.025
+
+pp_k_v: 0.55
+pp_min_vx: 0.04
+pp_max_wz: 0.22
+pp_heading_gain: 0.30
+pp_curvature_slowdown: 0.75
+pp_approach_dist: 0.80
+pp_stop_rotate_yaw: 1.85
+pp_accel_limit_v: 0.25
+pp_accel_limit_wz: 0.30
+pp_deadband_v: 0.015
+pp_deadband_wz: 0.025
+
+enable_dynamic_obstacles: true
+dynamic_cloud_topic: /fastlio2/body_cloud
+dynamic_obstacle_timeout: 0.50
+# New obstacle hits must be inside this base_link box; RViz shows its boundary.
+dynamic_x_min: -1.50
+dynamic_x_max: 2.50
+dynamic_y_abs: 1.50
+dynamic_z_min: -0.30
+dynamic_z_max: 1.50
+dynamic_ground_filter_enabled: true
+# Reject z <= this height after transforming into base_link (meters).
+dynamic_ground_z_max: 0.12
+# Process every incoming cloud, but sample fewer points to keep one callback
+# below the 0.5 s freshness watchdog. This is point sampling, not frame skipping.
+dynamic_point_step: 3
+dynamic_max_points: 1600
+dynamic_cluster_distance: 0.35
+# Same-scan 3D support before memory/inflation, including the point itself.
+# Exact duplicate coordinates count once; isolated hits never mark occupancy.
+dynamic_obstacle_support_radius: 0.15
+dynamic_obstacle_support_min_points: 3
+
+# Session-only 3D memory in FAST-LIO's continuous world frame.
+dynamic_memory_frame: lidar
+# Vehicle dimensions, margin, voxel size and collision sampling are shared in
+# fw_mid_common_utils/config/collision_geometry.yaml (geometry_config launch arg).
+dynamic_memory_max_voxels: 60000
+dynamic_memory_clear_enabled: true
+dynamic_memory_clear_confirmations: 1
+# Clear on the first valid free ray, within a fixed 15 cm tube (not recursive).
+# Must be <= 2 * dynamic_memory_resolution; zero restores exact-ray clearing.
+dynamic_memory_clear_neighbor_radius: 0.15
+# Only relevant when confirmations > 1; this is NOT a memory TTL.
+dynamic_memory_free_confirmation_window: 1.0
+dynamic_memory_endpoint_margin: 0.15
+dynamic_memory_max_clear_rays: 600
+# Longer real returns may clear old memory, but cannot mark hits outside the box.
+dynamic_max_range: 8.0
+# Physical laser origin expressed in /fastlio2/body_cloud (FAST-LIO t_il).
+dynamic_sensor_origin: [-0.011, -0.02329, 0.04412]
+dynamic_self_filter_z_max: 0.65
+
+collision_check_enabled: true
+collision_speed_reduction_enabled: true
+collision_require_static_map: true
+collision_prediction_time: 1.0
+collision_reaction_time: 0.2
+collision_linear_deceleration: 0.25
+collision_angular_deceleration: 0.5
+start_recovery_enabled: true
+# Includes room to select an exit beyond the inflation boundary.
+start_recovery_max_distance: 1.2
+# Recovery uses command_max_vx, including its full-speed braking check.
+
+dynamic_emergency_stop: true
+emergency_stop_mode: center_envelope
+# Early emergency envelope is measured from base_link, not the body edge.
+# The full swept footprint and measured braking checks still apply outside it.
+dynamic_center_stop_radius: 0.40
+emergency_x_min: 0.00
+emergency_x_max: 0.40
+emergency_y_abs: 0.30
+
+dynamic_avoidance_mode: astar_replan
+# Normal obstacle detections keep the existing collision/replan behavior.
+# Speed degradation is reserved for a short radar dropout window below.
+obstacle_slowdown_enabled: false
+obstacle_slowdown_distance: 0.30
+obstacle_min_speed_scale: 0.35
+dynamic_degraded_motion_enabled: true
+dynamic_degraded_timeout: 0.50
+dynamic_degraded_speed_scale: 0.25
+dynamic_detect_x_min: 0.00
+dynamic_detect_x_max: 2.00
+dynamic_detect_y_abs: 0.70
+dynamic_min_obstacle_points: 5
+dynamic_confirm_frames: 3
+dynamic_center_stable_dist: 0.25
+dynamic_exit_clearance: 0.30
+dynamic_static_filter_enabled: true
+dynamic_static_filter_radius: 0.00
+dynamic_static_filter_threshold: 50
+
+dynamic_history_publish_resolution: 0.10
+dynamic_astar_replan_period: 1.00
+dynamic_obstacle_update_dist: 0.30
+dynamic_obstacle_points_topic: /local_planner/dynamic_obstacle_points
+dynamic_keep_moving_during_replan: true
+# Replanning keeps normal tracking limits; each command still passes the guard.
+planner_service_timeout: 0.50
+# Only used with acknowledgment disabled (e.g. a standalone test planner).
+planner_overlay_settle_time: 0.03
+require_overlay_ack: true
+dynamic_overlay_ack_topic: /astar_planner_node/dynamic_overlay_stamp
+
+dynamic_marker_topic: /dynamic_obstacles_markers

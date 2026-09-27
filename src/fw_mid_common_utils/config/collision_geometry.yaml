@@ -1,0 +1,8 @@
+# Shared by A*, path processing, motion checks and RViz. Distances are meters.
+footprint_front: 0.34
+footprint_rear: 0.34
+footprint_half_width: 0.275
+footprint_margin: 0.02
+dynamic_memory_resolution: 0.10
+collision_sample_distance: 0.025
+planner_tracking_clearance: 0.0

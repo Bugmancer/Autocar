@@ -1,0 +1,13 @@
+<launch>
+  <arg name="config_path" default="$(find fw_mid_fastlio2)/config/lio.yaml" />
+  <!-- Bundled livox_ros_driver2 reports acceleration in g. -->
+  <arg name="imu_acc_scale" default="9.80665" />
+
+  <group ns="fastlio2">
+    <node pkg="fw_mid_fastlio2" type="fw_mid_fastlio2_node" name="lio_node"
+          output="screen" respawn="false">
+      <param name="config_path" value="$(arg config_path)" />
+      <param name="imu_acc_scale" value="$(arg imu_acc_scale)" />
+    </node>
+  </group>
+</launch>

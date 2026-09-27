@@ -1,0 +1,6 @@
+# Reserved for compatibility with the ROS2 interface. The current status is
+# returned for every code value.
+int32 code
+---
+# True only after the most recent relocalization request has converged.
+bool valid

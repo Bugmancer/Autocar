@@ -1,0 +1,42 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: python-can
+Upstream-Contact: Brian Thorne <hardbyte@gmail.com>
+Source: https://bitbucket.org/hardbyte/python-can
+
+Files: *
+Copyright: 2010-2019 Brian Thorne <hardbyte@gmail.com> et al.
+License: LGPL-3
+
+Files: can/interfaces/kvaser/*
+ can/logger.py
+Copyright: 2010 Dynamic Controls
+License: LGPL-3
+
+Files: can/interfaces/ixxat/*
+Copyright: 2016 Giuseppe Corbelli <giuseppe.corbelli@weightpack.com>
+License: LGPL-3
+
+Files: can/interfaces/pcan/basic.py
+Copyright: 1999-2017  PEAK-System Technik
+License: LGPL-3
+
+Files: can/viewer.py
+ test/test_viewer.py
+Copyright: 2018, Kristian Sloth Lauszus.
+License: LGPL-3+
+
+Files: test/serial_test.py
+Copyright: 2017, Boris Wenzlaff
+License: LGPL-3
+
+Files: debian/*
+Copyright: 2016-2019 IOhannes m zmölnig (Debian/GNU) <umlaeute@debian.org>
+License: LGPL-3
+
+License: LGPL-3
+ On Debian systems, the complete text of the GNU Lesser General
+ Public License version 3 can be found in "/usr/share/common-licenses/LGPL-3".
+
+License: LGPL-3+
+ On Debian systems, the complete text of the GNU Lesser General
+ Public License version 3 can be found in "/usr/share/common-licenses/LGPL-3".

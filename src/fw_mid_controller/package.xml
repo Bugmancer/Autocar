@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>fw_mid_controller</name>
+  <version>0.1.0</version>
+  <description>ROS1 path tracking controllers for the FW-mid chassis.</description>
+  <maintainer email="robot@todo.todo">robot</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+  <depend>fw_mid_common_utils</depend>
+</package>

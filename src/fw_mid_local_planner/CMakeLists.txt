@@ -1,0 +1,40 @@
+cmake_minimum_required(VERSION 3.0.2)
+project(fw_mid_local_planner)
+
+find_package(catkin REQUIRED COMPONENTS
+  fw_mid_common_utils
+  fw_mid_controller
+  geometry_msgs
+  nav_msgs
+  rospy
+  sensor_msgs
+  std_msgs
+  std_srvs
+  tf2_ros
+  visualization_msgs
+)
+
+catkin_python_setup()
+
+catkin_package(
+  CATKIN_DEPENDS
+    fw_mid_common_utils
+    fw_mid_controller
+    geometry_msgs
+    nav_msgs
+    rospy
+    sensor_msgs
+    std_msgs
+    std_srvs
+    tf2_ros
+    visualization_msgs
+)
+
+catkin_install_python(PROGRAMS
+  scripts/path_follower_node.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
+install(DIRECTORY config launch
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
+)

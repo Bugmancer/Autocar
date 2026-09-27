@@ -1,0 +1,28 @@
+<launch>
+  <arg name="map_pcd" default="$(find fw_mid_localizer)/maps/underground/map.pcd" />
+  <!-- Map-to-body estimate: x, y, z, yaw, pitch, roll; metres and radians. -->
+  <arg name="initial_pose" default="[0,0,0,0,0,0]" />
+  <arg name="start_lidar" default="true" />
+  <arg name="takeover_video_address" default="true" />
+  <arg name="start_lio" default="true" />
+  <arg name="start_rviz" default="true" />
+  <arg name="print_pose" default="true" />
+  <arg name="lio_config" default="$(find fw_mid_fastlio2)/config/lio.yaml" />
+  <arg name="localizer_config" default="$(find fw_mid_localizer)/config/localizer.yaml" />
+
+  <include if="$(arg start_lidar)" file="$(find livox_ros_driver2)/launch_ROS1/msg_MID360.launch">
+    <arg name="takeover_video_address" value="$(arg takeover_video_address)" />
+  </include>
+  <include if="$(arg start_lio)" file="$(find fw_mid_fastlio2)/launch/lio.launch">
+    <arg name="config_path" value="$(arg lio_config)" />
+  </include>
+  <include file="$(find fw_mid_localizer)/launch/localizer.launch">
+    <arg name="map_pcd" value="$(arg map_pcd)" />
+    <arg name="initial_pose" value="$(arg initial_pose)" />
+    <arg name="config_path" value="$(arg localizer_config)" />
+    <arg name="print_pose" value="$(arg print_pose)" />
+  </include>
+
+  <node if="$(arg start_rviz)" pkg="rviz" type="rviz" name="relocalization_rviz"
+        args="-d $(find fw_mid_localizer)/rviz/relocalization.rviz" output="screen" />
+</launch>
