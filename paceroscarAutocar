@@ -1,0 +1,169 @@
+warning: in the working copy of 'src/fw_mid_bringup/launch/navigation.launch', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/fw_mid_local_planner/CMakeLists.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/fw_mid_local_planner/README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/fw_mid_local_planner/config/local_planner.yaml', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/fw_mid_local_planner/fw_mid_local_planner/dynamic_obstacle_layer.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/fw_mid_local_planner/launch/local_planner.launch', LF will be replaced by CRLF the next time Git touches it
+[1mdiff --git a/src/fw_mid_bringup/launch/navigation.launch b/src/fw_mid_bringup/launch/navigation.launch[m
+[1mindex cfff169..65d52ca 100644[m
+[1m--- a/src/fw_mid_bringup/launch/navigation.launch[m
+[1m+++ b/src/fw_mid_bringup/launch/navigation.launch[m
+[36m@@ -13,6 +13,7 @@[m
+   <arg name="can_interface" default="can0" />[m
+   <arg name="max_vx" default="0.05" />[m
+   <arg name="max_wz" default="5.0" />[m
+[32m+[m[32m  <arg name="follower_node" default="path_follower_node.py" />[m
+   <arg name="body_to_base_link" default="0.28991 0.0 -0.81317 0.0 -0.785398 0.0" />[m
+   <arg name="lio_config" default="$(find fw_mid_fastlio2)/config/lio.yaml" />[m
+   <arg name="localizer_config" default="$(find fw_mid_localizer)/config/localizer.yaml" />[m
+[36m@@ -41,6 +42,7 @@[m
+     <arg name="require_localization" value="true" />[m
+     <arg name="max_vx" value="$(arg max_vx)" />[m
+     <arg name="max_wz" value="$(arg max_wz)" />[m
+[32m+[m[32m    <arg name="follower_node" value="$(arg follower_node)" />[m
+   </include>[m
+   <include file="$(find fw_mid_ctrl)/launch/navigation_driver.launch">[m
+     <arg name="start_can" value="$(arg enable_can)" />[m
+[1mdiff --git a/src/fw_mid_local_planner/CMakeLists.txt b/src/fw_mid_local_planner/CMakeLists.txt[m
+[1mindex 47a2c62..849c175 100644[m
+[1m--- a/src/fw_mid_local_planner/CMakeLists.txt[m
+[1m+++ b/src/fw_mid_local_planner/CMakeLists.txt[m
+[36m@@ -32,6 +32,7 @@[m [mcatkin_package([m
+ [m
+ catkin_install_python(PROGRAMS[m
+   scripts/path_follower_node.py[m
+[32m+[m[32m  scripts/path_follower_node_v1.py[m
+   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}[m
+ )[m
+ [m
+[1mdiff --git a/src/fw_mid_local_planner/README.md b/src/fw_mid_local_planner/README.md[m
+[1mindex 5d85ffb..0c282ca 100644[m
+[1m--- a/src/fw_mid_local_planner/README.md[m
+[1m+++ b/src/fw_mid_local_planner/README.md[m
+[36m@@ -4,6 +4,27 @@[m [mROS1 Noetic 局部规划包：跟踪 `fw_mid_global_planner` 的 A* 路径，将[m
+ 点云写入本次会话的障碍记忆，并在发布速度前检查完整车身的运动及制动轨迹。[m
+ 默认以 PID 跟踪，可切换 Pure Pursuit。[m
+ [m
+[32m+[m[32m实验性的人工势场跟踪器位于 `scripts/path_follower_node_v1.py`。它复用本节点的[m
+[32m+[m[32m目标接收、FAST-LIO 障碍记忆、A* `/astar_planner_node/get_plan` 动态重规划和最终[m
+[32m+[m[32m车身碰撞检查，只替换路径跟踪器：从处理后的离散路径按 `apf_waypoint_stride` 取[m
+[32m+[m[32m两个未到达点，近点吸引力较大，远点用于平滑；实时障碍点在影响半径内产生随距离[m
+[32m+[m[32m减小而增强的斥力，合力方向转换成 `cmd_vel`。可通过现有 launch 选择：[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32mroslaunch fw_mid_local_planner local_planner.launch \[m
+[32m+[m[32m  follower_node:=path_follower_node_v1.py[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32m完整导航启动时使用同名参数：[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32mroslaunch fw_mid_bringup navigation.launch \[m
+[32m+[m[32m  follower_node:=path_follower_node_v1.py[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32m相关参数以 `apf_` 开头，默认值在 `config/local_planner.yaml` 中；原有[m
+[32m+[m[32m`path_follower_node.py` 仍是默认跟踪器。[m
+[32m+[m
+ ## 接口[m
+ [m
+ | 接口 | 作用 |[m
+[1mdiff --git a/src/fw_mid_local_planner/config/local_planner.yaml b/src/fw_mid_local_planner/config/local_planner.yaml[m
+[1mindex 85711c1..0294b45 100644[m
+[1m--- a/src/fw_mid_local_planner/config/local_planner.yaml[m
+[1m+++ b/src/fw_mid_local_planner/config/local_planner.yaml[m
+[36m@@ -17,6 +17,28 @@[m [mwaypoint_tolerance: 0.25[m
+ goal_tolerance: 0.35[m
+ tracking_controller: pid[m
+ [m
+[32m+[m[32m# path_follower_node_v1.py: two discrete path targets plus point-cloud APF.[m
+[32m+[m[32m# The first target has the larger attraction and the second target smooths[m
+[32m+[m[32m# the direction change. The original node ignores these parameters.[m
+[32m+[m[32mapf_waypoint_stride: 4[m
+[32m+[m[32mapf_near_attraction_gain: 1.00[m
+[32m+[m[32mapf_far_attraction_gain: 0.35[m
+[32m+[m[32mapf_repulsive_gain: 0.08[m
+[32m+[m[32mapf_obstacle_influence_distance: 0.90[m
+[32m+[m[32mapf_repulsive_max_force: 8.0[m
+[32m+[m[32mapf_max_obstacles: 300[m
+[32m+[m[32mapf_heading_gain: 1.80[m
+[32m+[m[32mapf_stop_rotate_yaw: 1.45[m
+[32m+[m[32mapf_slowdown_yaw: 1.00[m
+[32m+[m[32mapf_goal_approach_distance: 0.80[m
+[32m+[m[32mapf_min_speed_scale: 0.20[m
+[32m+[m[32mapf_min_vx: 0.04[m
+[32m+[m[32mapf_force_epsilon: 0.0001[m
+[32m+[m[32mapf_accel_limit_v: 0.25[m
+[32m+[m[32mapf_accel_limit_wz: 0.30[m
+[32m+[m[32mapf_deadband_v: 0.015[m
+[32m+[m[32mapf_deadband_wz: 0.025[m
+[32m+[m
+ path_enable_shortcut: true[m
+ path_enable_smoothing: true[m
+ path_resample_ds: 0.10[m
+[1mdiff --git a/src/fw_mid_local_planner/fw_mid_local_planner/dynamic_obstacle_layer.py b/src/fw_mid_local_planner/fw_mid_local_planner/dynamic_obstacle_layer.py[m
+[1mindex d8e1ae8..b0848c4 100644[m
+[1m--- a/src/fw_mid_local_planner/fw_mid_local_planner/dynamic_obstacle_layer.py[m
+[1m+++ b/src/fw_mid_local_planner/fw_mid_local_planner/dynamic_obstacle_layer.py[m
+[36m@@ -88,6 +88,7 @@[m [mclass DynamicObstacleLayer:[m
+         self._clear_generation = 0[m
+         self.local_points = [][m
+         self.map_points = [][m
+[32m+[m[32m        self.point_stamps = [][m
+         self.last_update_time = None[m
+         self.last_received = None[m
+         self.projection_valid = False[m
+[36m@@ -236,6 +237,16 @@[m [mclass DynamicObstacleLayer:[m
+         with self._lock:[m
+             return list(self.local_points), list(self.map_points)[m
+ [m
+[32m+[m[32m    def timed_point_snapshot(self):[m
+[32m+[m[32m        """Return map-frame points with their last occupied observation time.[m
+[32m+[m
+[32m+[m[32m        This is an additional APF view; the ordinary snapshot continues to[m
+[32m+[m[32m        include every remembered obstacle for collision checking and A*.[m
+[32m+[m[32m        """[m
+[32m+[m[32m        with self._lock:[m
+[32m+[m[32m            return [(x, y, stamp) for (x, y), stamp[m
+[32m+[m[32m                    in zip(self.map_points, self.point_stamps)][m
+[32m+[m
+     def update_map_points(self, robot_pose=None):[m
+         if not self.enabled:[m
+             return[m
+[36m@@ -253,6 +264,7 @@[m [mclass DynamicObstacleLayer:[m
+                     return[m
+                 self.local_points = [(float(x), float(y)) for x, y, _ in local][m
+                 self.map_points = [(float(x), float(y)) for x, y, _ in mapped][m
+[32m+[m[32m                self.point_stamps = [float(row[3]) for row in snapshot][m
+                 self.projection_valid = True[m
+         except Exception as exc:[m
+             with self._lock:[m
+[36m@@ -269,6 +281,7 @@[m [mclass DynamicObstacleLayer:[m
+             self.memory.clear()[m
+             self.local_points = [][m
+             self.map_points = [][m
+[32m+[m[32m            self.point_stamps = [][m
+             self.last_update_time = None[m
+             self.last_received = None[m
+             self.projection_valid = False[m
+[1mdiff --git a/src/fw_mid_local_planner/launch/local_planner.launch b/src/fw_mid_local_planner/launch/local_planner.launch[m
+[1mindex 870f162..f3e246a 100644[m
+[1m--- a/src/fw_mid_local_planner/launch/local_planner.launch[m
+[1m+++ b/src/fw_mid_local_planner/launch/local_planner.launch[m
+[36m@@ -6,6 +6,7 @@[m
+   <arg name="base_frame" default="base_link" />[m
+   <arg name="body_to_base_link" default="0.28991 0.0 -0.81317 0.0 -0.785398 0.0" />[m
+   <arg name="require_localization" default="false" />[m
+[32m+[m[32m  <arg name="follower_node" default="path_follower_node.py" />[m
+   <arg name="max_vx" default="0.30" />[m
+   <!-- Same units and limits as navigation_driver.launch: m/s and deg/s. -->[m
+   <arg name="max_wz" default="30.0" />[m
+[36m@@ -20,7 +21,7 @@[m
+   </group>[m
+ [m
+   <node pkg="fw_mid_local_planner"[m
+[31m-        type="path_follower_node.py"[m
+[32m+[m[32m        type="$(arg follower_node)"[m
+         name="path_follower_node"[m
+         output="screen">[m
+     <rosparam command="load" file="$(arg config_file)" />[m

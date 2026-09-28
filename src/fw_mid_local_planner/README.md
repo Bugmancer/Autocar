@@ -4,6 +4,74 @@ ROS1 Noetic 局部规划包：跟踪 `fw_mid_global_planner` 的 A* 路径，将
 点云写入本次会话的障碍记忆，并在发布速度前检查完整车身的运动及制动轨迹。
 默认以 PID 跟踪，可切换 Pure Pursuit。
 
+实验性的人工势场跟踪器位于 `scripts/path_follower_node_v1.py`。它复用本节点的
+目标接收、FAST-LIO 障碍记忆、A* `/astar_planner_node/get_plan` 动态重规划和最终
+车身碰撞检查，只替换路径跟踪器：从处理后的离散路径按 `apf_waypoint_stride` 取
+两个未到达点，近点吸引力较大，远点用于平滑；实时障碍点在影响半径内产生随距离
+减小而增强的斥力，合力方向转换成 `cmd_vel`。可通过现有 launch 选择：
+
+```bash
+roslaunch fw_mid_local_planner local_planner.launch \
+  follower_node:=path_follower_node_v1.py
+```
+
+完整导航启动时使用同名参数：
+
+```bash
+roslaunch fw_mid_bringup navigation.launch \
+  follower_node:=path_follower_node_v1.py
+```
+
+相关参数以 `apf_` 开头，默认值在 `config/local_planner.yaml` 中；原有
+`path_follower_node.py` 仍是默认跟踪器。
+
+v1 的力与速度计算位于 `fw_mid_local_planner/potential_field.py`，不依赖 ROS；
+`path_follower_node_v1.py` 负责复用原节点和发布诊断。第一目标为裁剪后首个
+未到达点，第二目标为向前间隔 `apf_waypoint_stride` 个点的位置；仅剩终点时
+只计算一次吸引力。吸引力幅值保持恒定，默认近点 `1.0`、远点 `0.35`。
+
+v1 的速度与平滑参数：
+
+| 参数 | 默认值 | 含义 |
+| --- | --- | --- |
+| `apf_danger_clearance` | `0.05 m` | 车身净空进入此范围后直接驻车 |
+| `apf_force_filter_time` | `0.20 s` | 合力向量低通时间常数，设为 `0` 可关闭 |
+| `apf_memory_decay_time` | `2.0 s` | 近期观测窗口结束后的斥力指数衰减时间常数 |
+| `apf_memory_min_weight` | `0.25` | 历史障碍的最低斥力权重 |
+| `apf_stall_replan_time` | `2.0 s` | 持续合力抵消多久后重新请求 A* |
+
+净空是障碍点到带安全余量的矩形车身的距离，再减障碍体素半径，与车心距离不同。
+危险区判断使用周围全部记忆点，包含侧后方；窄通道中可能更保守。危险区外，
+斥力只改变合力方向，线速度不按障碍距离或斥力大小缩放。进入 `apf_danger_clearance`
+后直接发布零线速度和零角速度；原有动态急停、车辆扫掠和制动碰撞检查仍会更早
+触发时停车。v1 会强制关闭原节点的 `obstacle_slowdown_enabled`，避免出现渐进减速。
+
+斥力仍按车心到障碍表面的距离计算。最近 `dynamic_obstacle_timeout` 内观测的点
+权重为 `1`；超过后为 `max(apf_memory_min_weight, exp(-超出时间 / apf_memory_decay_time))`。
+时间来自体素最后一次真实命中，重新投影不会刷新时间。年龄只改变 APF 斥力；
+危险区判定、A* overlay 和车身碰撞检查继续使用完整障碍记忆。竖直方向投影到相同
+XY 的体素合并为一个斥力点，取最新命中时间，减少障碍高度导致的重复叠加。
+
+合力按向量滤波，避免航向角在正负 π 处跳变。新路径实际被接受、停车或恢复段
+接回普通跟踪时清除旧滤波方向。当前周期的危险区判定和未滤波合力仍约束运动，
+滤波不会延迟近障碍停车。下游碰撞检查停车后，下一周期从实际发布速度继续限加速；
+高控制频率下保留死区之前的累积状态，避免一直无法起步。
+
+日志 `APF:` 每秒显示原始/滤波合力、最近净空、点数、
+状态及经过碰撞检查后实际发布的 `vx/wz`。RViz 方向箭头显示滤波后的合力；
+合力抵消时删除箭头并输出零速度。在 `astar_replan` 模式下持续抵消会显式请求
+现有 A* 服务，有动态记忆时使用避障重规划，没有 overlay 时也能请求普通规划。
+这只是针对合力抵消的恢复，不保证消除所有局部极小值，也不预测移动障碍速度。
+
+在工作区根目录运行离线行为测试（需要 Python 3 和 NumPy）：
+
+```bash
+python3 -m unittest discover -s src/fw_mid_local_planner/tests -v
+```
+
+测试覆盖力和速度计算、障碍时间戳投影、碰撞记忆、重规划/恢复/发布接口。
+ROS 消息与传输使用替身，因此这些测试不能替代 ROS 联调和实车验证。
+
 ## 接口
 
 | 接口 | 作用 |

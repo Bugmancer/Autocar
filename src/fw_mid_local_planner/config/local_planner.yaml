@@ -17,6 +17,39 @@ waypoint_tolerance: 0.25
 goal_tolerance: 0.35
 tracking_controller: pid
 
+# path_follower_node_v1.py: two discrete path targets plus point-cloud APF.
+# The first target has the larger attraction and the second target smooths
+# the direction change. The original node ignores these parameters.
+apf_waypoint_stride: 4
+apf_near_attraction_gain: 1.00
+apf_far_attraction_gain: 0.35
+apf_repulsive_gain: 0.08
+apf_obstacle_influence_distance: 0.90
+apf_repulsive_max_force: 8.0
+apf_max_obstacles: 300
+apf_heading_gain: 1.80
+apf_stop_rotate_yaw: 1.45
+apf_slowdown_yaw: 1.00
+apf_goal_approach_distance: 0.80
+apf_min_speed_scale: 0.20
+apf_min_vx: 0.04
+apf_force_epsilon: 0.0001
+apf_accel_limit_v: 0.25
+apf_accel_limit_wz: 0.30
+apf_deadband_v: 0.015
+apf_deadband_wz: 0.025
+# Danger clearance is measured from the padded rectangular body, less the
+# obstacle voxel radius, NOT distance from base_link. Entering it parks.
+apf_danger_clearance: 0.05
+# Vector low-pass time constant in seconds; 0 disables filtering.
+apf_force_filter_time: 0.20
+# Recent observations retain full weight for dynamic_obstacle_timeout.
+# Afterwards only APF repulsion decays; A*/collision occupancy never decays.
+apf_memory_decay_time: 2.0
+apf_memory_min_weight: 0.25
+# Sustained force cancellation triggers A* again in astar_replan mode.
+apf_stall_replan_time: 2.0
+
 path_enable_shortcut: true
 path_enable_smoothing: true
 path_resample_ds: 0.10

@@ -13,6 +13,7 @@
   <arg name="can_interface" default="can0" />
   <arg name="max_vx" default="0.05" />
   <arg name="max_wz" default="5.0" />
+  <arg name="follower_node" default="path_follower_node.py" />
   <arg name="body_to_base_link" default="0.28991 0.0 -0.81317 0.0 -0.785398 0.0" />
   <arg name="lio_config" default="$(find fw_mid_fastlio2)/config/lio.yaml" />
   <arg name="localizer_config" default="$(find fw_mid_localizer)/config/localizer.yaml" />
@@ -41,6 +42,7 @@
     <arg name="require_localization" value="true" />
     <arg name="max_vx" value="$(arg max_vx)" />
     <arg name="max_wz" value="$(arg max_wz)" />
+    <arg name="follower_node" value="$(arg follower_node)" />
   </include>
   <include file="$(find fw_mid_ctrl)/launch/navigation_driver.launch">
     <arg name="start_can" value="$(arg enable_can)" />

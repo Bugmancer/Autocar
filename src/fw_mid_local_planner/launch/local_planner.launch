@@ -6,6 +6,7 @@
   <arg name="base_frame" default="base_link" />
   <arg name="body_to_base_link" default="0.28991 0.0 -0.81317 0.0 -0.785398 0.0" />
   <arg name="require_localization" default="false" />
+  <arg name="follower_node" default="path_follower_node.py" />
   <arg name="max_vx" default="0.30" />
   <!-- Same units and limits as navigation_driver.launch: m/s and deg/s. -->
   <arg name="max_wz" default="30.0" />
@@ -20,7 +21,7 @@
   </group>
 
   <node pkg="fw_mid_local_planner"
-        type="path_follower_node.py"
+        type="$(arg follower_node)"
         name="path_follower_node"
         output="screen">
     <rosparam command="load" file="$(arg config_file)" />

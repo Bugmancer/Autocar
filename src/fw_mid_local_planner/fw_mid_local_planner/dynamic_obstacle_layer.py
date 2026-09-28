@@ -88,6 +88,7 @@ class DynamicObstacleLayer:
         self._clear_generation = 0
         self.local_points = []
         self.map_points = []
+        self.point_stamps = []
         self.last_update_time = None
         self.last_received = None
         self.projection_valid = False
@@ -236,6 +237,16 @@ class DynamicObstacleLayer:
         with self._lock:
             return list(self.local_points), list(self.map_points)
 
+    def timed_point_snapshot(self):
+        """Return map-frame points with their last occupied observation time.
+
+        This is an additional APF view; the ordinary snapshot continues to
+        include every remembered obstacle for collision checking and A*.
+        """
+        with self._lock:
+            return [(x, y, stamp) for (x, y), stamp
+                    in zip(self.map_points, self.point_stamps)]
+
     def update_map_points(self, robot_pose=None):
         if not self.enabled:
             return
@@ -253,6 +264,7 @@ class DynamicObstacleLayer:
                     return
                 self.local_points = [(float(x), float(y)) for x, y, _ in local]
                 self.map_points = [(float(x), float(y)) for x, y, _ in mapped]
+                self.point_stamps = [float(row[3]) for row in snapshot]
                 self.projection_valid = True
         except Exception as exc:
             with self._lock:
@@ -269,6 +281,7 @@ class DynamicObstacleLayer:
             self.memory.clear()
             self.local_points = []
             self.map_points = []
+            self.point_stamps = []
             self.last_update_time = None
             self.last_received = None
             self.projection_valid = False

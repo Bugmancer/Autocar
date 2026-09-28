@@ -32,6 +32,7 @@ catkin_package(
 
 catkin_install_python(PROGRAMS
   scripts/path_follower_node.py
+  scripts/path_follower_node_v1.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
