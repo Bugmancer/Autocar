@@ -36,6 +36,8 @@ class FootprintCollisionChecker:
     configured limit.  This permits exact unicycle integration while checking a
     conservative, executable stopping maneuver.
     """
+    # 位姿和障碍点必须处于同一固定坐标系；检查结果会同时覆盖候选指令和
+    # 当前实测运动的刹车分支，任何输入/计算超限均 fail-closed。
 
     MAX_POSES = 4096
     MAX_OBSTACLES = 100000
@@ -105,6 +107,7 @@ class FootprintCollisionChecker:
 
     @staticmethod
     def _advance(pose, velocity_x, velocity_yaw, effective_time):
+        # 用 unicycle 闭式积分生成弧线，避免小角度时数值除零。
         x, y, yaw = pose
         angle = velocity_yaw * effective_time
         half_angle = angle * 0.5
@@ -201,6 +204,7 @@ class FootprintCollisionChecker:
         failed, up to its first collision.  ``occupied.resolution`` is required
         when a static map callback is supplied.
         """
+        # occupied 是原始栅格查询，不接受已膨胀 costmap，避免重复扩大车体尺寸。
         trajectory = []
         try:
             pose = self._numbers(pose, 3)

@@ -11,6 +11,7 @@ TimedPoint2D = Tuple[float, float, float]
 
 def supported_obstacle_points(points, radius, min_points):
     """Keep points with enough distinct same-scan returns in a 3D neighborhood."""
+    # 通过同帧邻域支持数抑制孤立噪点；只有保留下来的命中才会进入记忆。
     if not math.isfinite(radius) or radius <= 0 or min_points < 2:
         raise ValueError("Obstacle support requires positive radius and at least two points")
     unique = list(dict.fromkeys(tuple(float(v) for v in p) for p in points))
@@ -46,6 +47,7 @@ def proximity_speed_scale(points, front, rear, half_width, margin,
     This comfort limiter never authorizes motion: the swept collision check
     still decides whether the scaled command and current motion are safe.
     """
+    # 这是舒适减速器，不替代后续的完整扫掠碰撞与制动检查。
     clearance = float("inf")
     for x, y in points:
         if not math.isfinite(x) or not math.isfinite(y):
@@ -58,6 +60,7 @@ def proximity_speed_scale(points, front, rear, half_width, margin,
 
 
 def largest_cluster_indices(points: Sequence[Point2D], max_distance: float) -> List[int]:
+    """返回前方点云中最大连通簇，减少多个噪声簇触发重规划。"""
     if not points:
         return []
 
@@ -92,6 +95,7 @@ def select_front_obstacles(
     x_max: float,
     y_abs: float,
 ) -> Tuple[List[Point2D], List[Point2D]]:
+    """按机器人坐标的前方窗口筛选，并保持局部点与地图点一一对应。"""
     local_result = []
     map_result = []
     for local_point, map_point in zip(local_points, map_points):
@@ -127,6 +131,7 @@ def trajectory_cost(
     collision_radius: float,
     influence_distance: float,
 ) -> float:
+    """按轨迹到最近障碍的距离给代价，进入碰撞半径时返回无穷大。"""
     if not trajectory or not obstacles:
         return 0.0
     minimum = min(

@@ -17,6 +17,13 @@ from .obstacle_processing import largest_cluster_indices, supported_obstacle_poi
 
 
 class DynamicObstacleLayer:
+    """把点云投影到机器人/记忆/地图坐标，并维护会话级障碍物。
+
+    点云的原始 frame 只用于 TF 查询；``memory_frame`` 是固定的连续世界
+    坐标，障碍记忆在该坐标中累积，再分别投影到 ``robot_frame`` 做近场
+    判断、投影到 ``global_frame`` 供 A* 和 RViz 使用。输入过期、TF 失败
+    或内存溢出时由上层安全联锁停止运动。
+    """
     def __init__(self, tf_buffer, robot_frame="base_link", global_frame="map"):
         self.tf_buffer = tf_buffer
         self.robot_frame = self._normalise_frame(robot_frame)
@@ -103,12 +110,14 @@ class DynamicObstacleLayer:
         return str(frame).strip().strip("/")
 
     def lookup(self, target, source, stamp):
+        # tf2 的 lookup_transform(target, source) 返回 source 点在 target 中的表示。
         if target == source:
             return None
         return self.tf_buffer.lookup_transform(target, source, stamp, rospy.Duration(0.05))
 
     @staticmethod
     def transform_points(points, transform):
+        # 四元数旋转后再加平移；无效四元数/结果一律抛错，不能默认为零障碍。
         points = np.asarray(points, dtype=float).reshape((-1, 3))
         if transform is None:
             return points.copy()
@@ -128,6 +137,7 @@ class DynamicObstacleLayer:
 
     def cloud_cb(self, message):
         started = time.monotonic()
+        # 只接收时间窗内的新扫描；时间倒退会锁存输入错误，等待人工清空会话。
         frame = self._normalise_frame(message.header.frame_id)
         stamp = message.header.stamp
         age = (rospy.Time.now() - stamp).to_sec()
@@ -153,6 +163,7 @@ class DynamicObstacleLayer:
             if not len(points):
                 return
             robot_points = self.transform_points(points, to_robot)
+            # 先在机器人坐标中过滤车体自身、地面和感兴趣区域，再写入全局记忆。
             inside_body = ((robot_points[:, 0] >= -self.rear)
                            & (robot_points[:, 0] <= self.front)
                            & (np.abs(robot_points[:, 1]) <= self.half_width)
@@ -196,6 +207,7 @@ class DynamicObstacleLayer:
             rospy.logwarn_throttle(2.0, "Obstacle observation rejected: %s" % exc)
 
     def is_fresh(self):
+        """只有最近接收时间和消息时间都未超时，动态数据才可放行运动。"""
         with self._lock:
             if (not self.enabled or self.last_update_time is None or self.last_received is None
                     or self.input_error or self.memory.overflowed or not self.projection_valid):
@@ -325,6 +337,7 @@ class DynamicObstacleLayer:
         return marker
 
     def should_emergency_stop(self):
+        """检查机器人前方紧急包络；数据不新鲜时由控制器执行停机策略。"""
         if not self.enabled or not self.use_emergency_stop or not self.is_fresh():
             return False
         points, _ = self.point_snapshot()

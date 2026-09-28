@@ -87,6 +87,7 @@ struct NodeState
     ros::WallTime last_received;
     ros::WallTime last_alignment;
     CloudType::Ptr last_cloud{new CloudType};
+    // last_local_* 表示 body 到连续 LIO 世界的变换，map_local_* 表示该世界到地图的校正。
     M3D last_local_rotation = M3D::Identity();
     V3D last_local_translation = V3D::Zero();
     M3D map_local_rotation = M3D::Identity();
@@ -96,6 +97,8 @@ struct NodeState
     std::string body_frame;
 };
 
+// ROS 定位集成层：同步 body 点云与 LIO 里程计，以 ICP 校正 map -> local，
+// 并向导航发布定位有效性。连续的 local -> body 仍由 LIO 节点提供。
 class LocalizerNode
 {
 public:
@@ -248,6 +251,7 @@ private:
     void syncCallback(const sensor_msgs::PointCloud2ConstPtr &cloud_message,
                       const nav_msgs::OdometryConstPtr &odom_message)
     {
+        // 点云必须位于里程计的 child frame；只有帧名、采样时间均匹配才能组合变换。
         const std::string odom_frame = normalizedFrame(odom_message->header.frame_id);
         const std::string body_frame = normalizedFrame(odom_message->child_frame_id);
         if (odom_frame.empty() || body_frame.empty() ||
@@ -350,6 +354,7 @@ private:
 
         if (publish_existing_tf)
         {
+            // 两次 ICP 之间保留 map -> local 校正，并用最新 LIO 位姿更新 map -> body。
             broadcastTransform(ros::Time::now(), local_frame, existing_rotation,
                                existing_translation);
             if (message_time != last_pose_stamp_)
@@ -409,6 +414,7 @@ private:
             last_attempt_stamp_ = message_time;
         }
 
+        // ICP 计算使用同一个点云/里程计快照，计算期间不占用 ROS 输入状态锁。
         bool converged = false;
         double rough_score = 0.0;
         double refine_score = 0.0;
@@ -435,6 +441,7 @@ private:
             initial_guess.block<3, 3>(0, 0).cast<double>();
         const V3D map_body_translation =
             initial_guess.block<3, 1>(0, 3).cast<double>();
+        // T_map_local = T_map_body * inverse(T_local_body)，消去本次扫描的局部运动。
         const M3D new_map_local_rotation =
             map_body_rotation * current_local_rotation.transpose();
         const V3D new_map_local_translation =
@@ -443,6 +450,7 @@ private:
         bool result_is_current = false;
         {
             std::lock_guard<std::mutex> lock(state_.mutex);
+            // 重定位请求可在 ICP 运算期间更新；旧请求的结果不能覆盖新初值。
             if (request_id == state_.request_id)
             {
                 state_.map_local_rotation = new_map_local_rotation;
@@ -511,6 +519,7 @@ private:
             }
         }
 
+        // 服务初值是 body 在 map 中的位置/姿态，平移单位米、欧拉角单位弧度。
         const Eigen::AngleAxisd yaw_angle(request.yaw, Eigen::Vector3d::UnitZ());
         const Eigen::AngleAxisd roll_angle(request.roll, Eigen::Vector3d::UnitX());
         const Eigen::AngleAxisd pitch_angle(request.pitch, Eigen::Vector3d::UnitY());
@@ -548,6 +557,7 @@ private:
 
     bool validLocked() const
     {
+        // 曾经收敛不等于当前可用；输入和最近一次成功配准都必须在各自时间窗内。
         const ros::WallTime now = ros::WallTime::now();
         return state_.localized && !state_.request_pending &&
                inputFreshLocked() &&
@@ -575,6 +585,7 @@ private:
     void broadcastTransform(const ros::Time &stamp, const std::string &local_frame,
                             const M3D &rotation, const V3D &translation)
     {
+        // TF 的 parent 为 map、child 为 local；矩阵把 local 中的点转换到 map。
         geometry_msgs::TransformStamped transform;
         transform.header.stamp = stamp;
         transform.header.frame_id = config_.map_frame;
@@ -625,6 +636,7 @@ private:
         fitness_pub_.publish(fitness);
         if (aligned_cloud_pub_.getNumSubscribers() > 0)
         {
+            // 仅用于配准诊断：将输入 body 点云按本次 ICP 结果投影到 map。
             CloudType aligned;
             pcl::transformPointCloud(*cloud, aligned, map_body);
             sensor_msgs::PointCloud2 message;

@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Convert ROS Twist commands to the FW-mid JSON command contract."""
+"""Convert ROS Twist commands to the FW-mid JSON command contract.
+
+``Twist`` uses SI units (m/s and rad/s).  The JSON bridge keeps linear
+velocity in m/s but converts angular velocity to the chassis protocol's
+degree/s unit before the CAN driver receives it.
+"""
 
 import json
 import math
@@ -27,6 +32,7 @@ def build_command(
     max_wz_deg=30.0,
 ):
     """Return a validated command dictionary using chassis units."""
+    # ROS Twist 的角速度为 rad/s，底盘 JSON 使用 deg/s；线速度仍为 m/s。
     values = (float(vx), float(vy), float(wz_rad))
     if not all(math.isfinite(value) for value in values):
         raise ValueError("Twist command contains a non-finite value")
@@ -44,7 +50,10 @@ def build_command(
 
 
 class CmdVelToCommand:
+    """把导航 Twist 转成限幅后的底盘命令，未收到输入或输入超时则发送驻车。"""
     def __init__(self):
+        # Timer heartbeat plus monotonic timeout prevents a stale planner
+        # command from remaining active in the downstream driver.
         self.drive_gear = int(rospy.get_param("~drive_gear", 6))
         self.stop_gear = int(rospy.get_param("~stop_gear", 1))
         self.max_vx = float(rospy.get_param("~max_vx", 0.3))
@@ -99,6 +108,7 @@ class CmdVelToCommand:
             self._last_input_monotonic = time.monotonic()
 
     def _timer_cb(self, _event):
+        # 用单调时钟衡量命令年龄，避免 ROS 仿真时间跳变影响超时判断。
         now = time.monotonic()
         with self._lock:
             command = dict(self._last_command)

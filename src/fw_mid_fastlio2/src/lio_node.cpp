@@ -329,6 +329,7 @@ private:
 
     void publishOdometry(double time)
     {
+        // r_wi/t_wi 给出 IMU/body 在连续 world_frame 中的位姿；这里尚未包含地图定位校正。
         if (odom_pub_.getNumSubscribers() == 0) return;
         nav_msgs::Odometry message;
         message.header.frame_id = node_config_.world_frame;
@@ -341,6 +342,7 @@ private:
         q.normalize();
         message.pose.pose.orientation.x = q.x(); message.pose.pose.orientation.y = q.y();
         message.pose.pose.orientation.z = q.z(); message.pose.pose.orientation.w = q.w();
+        // ROS Odometry 的 twist 位于 child_frame，因此把世界系速度逆旋转到 body。
         const V3D velocity = kf_->x().r_wi.transpose() * kf_->x().v;
         message.twist.twist.linear.x = velocity.x(); message.twist.twist.linear.y = velocity.y();
         message.twist.twist.linear.z = velocity.z();
@@ -372,6 +374,7 @@ private:
 
     void broadcastTF(double time)
     {
+        // 只广播连续的 world -> body；导航所需 map -> world 由独立定位节点补齐。
         geometry_msgs::TransformStamped transform;
         transform.header.frame_id = node_config_.world_frame;
         transform.child_frame_id = node_config_.body_frame;
@@ -402,10 +405,13 @@ private:
             ROS_ERROR_THROTTLE(1.0, "FAST-LIO2 state contains non-finite values; suppressing output");
             return;
         }
+        // TF、里程计和两种点云共用扫描结束时间，便于定位节点按同一时刻同步。
         const double time = m_package_.cloud_end_time;
         broadcastTF(time); publishOdometry(time);
+        // r_il/t_il 是 LiDAR -> IMU/body 外参；body_cloud 供 ICP 和近场障碍处理。
         publishCloud(body_cloud_pub_, builder_->lidar_processor()->transformCloud(m_package_.cloud,
                      kf_->x().r_il, kf_->x().t_il), node_config_.body_frame, time);
+        // world_cloud 进一步应用 LIO 姿态，处于连续局部世界系，而非静态地图 map。
         publishCloud(world_cloud_pub_, builder_->lidar_processor()->transformCloud(m_package_.cloud,
                      builder_->lidar_processor()->r_wl(), builder_->lidar_processor()->t_wl()),
                      node_config_.world_frame, time);

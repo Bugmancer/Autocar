@@ -25,7 +25,12 @@ from fw_mid_common_utils.collision_geometry import CollisionGeometry
 
 
 class AStarPlanner:
-    """Load a static map and expose A* planning through a ROS1 service."""
+    """Load a static map and expose A* planning through a ROS1 service.
+
+    ``map_frame`` 是唯一允许的输入/输出坐标系：服务请求先从世界坐标
+    映射到栅格索引，搜索完成后再转换回同一 ``map`` 坐标系。代价地图会
+    同时叠加静态膨胀和来自局部规划器的动态障碍快照。
+    """
 
     def __init__(self):
         self.map_yaml_path = str(rospy.get_param("~map_yaml_path", ""))
@@ -322,6 +327,8 @@ class AStarPlanner:
 
     def plan_cb(self, request):
         response = GetPlanResponse()
+        # A* 本身不做 TF 查询；坐标系不一致时直接拒绝，避免把不同原点
+        # 的位置误当成同一张地图中的栅格。
         start_frame = self._normalise_frame(request.start.header.frame_id)
         goal_frame = self._normalise_frame(request.goal.header.frame_id)
         if start_frame != self.map_frame or goal_frame != self.map_frame:
@@ -399,6 +406,8 @@ class AStarPlanner:
         return response
 
     def a_star(self, start, goal, costmap):
+        # open_set 保存待展开节点，closed 防止重复展开；八邻域的对角线
+        # 还要检查两个相邻正交格，防止路径从膨胀障碍物的角上穿过去。
         if self._cell_blocked(start, costmap) or self._cell_blocked(goal, costmap):
             return None
 
@@ -484,6 +493,7 @@ class AStarPlanner:
         return 0 <= grid_x < self.width and 0 <= grid_y < self.height
 
     def grid_to_world(self, grid_x, grid_y):
+        """将 OccupancyGrid 的行列索引转换到带旋转原点的 map 坐标。"""
         yaw = float(self.origin[2]) if len(self.origin) > 2 else 0.0
         local_x = grid_x * self.resolution
         local_y = grid_y * self.resolution
@@ -495,6 +505,7 @@ class AStarPlanner:
         )
 
     def world_to_grid(self, world_x, world_y):
+        """将 map 坐标逆旋转到地图局部轴，再取所属栅格的 floor 索引。"""
         yaw = float(self.origin[2]) if len(self.origin) > 2 else 0.0
         delta_x = world_x - self.origin[0]
         delta_y = world_y - self.origin[1]

@@ -38,6 +38,7 @@ def segment_collision_free(
     is_occupied: Optional[CollisionChecker],
     step: float,
 ) -> bool:
+    """沿线离散采样；任何采样点占用都否决整段捷径。"""
     if is_occupied is None:
         return True
 
@@ -71,6 +72,7 @@ def shortcut_path(
     check_step: float,
     max_skip: int = 80,
 ) -> List[Point2D]:
+    # 从当前点尝试最远可见点，且每次都用占用查询验证整段线段。
     if len(points) <= 2:
         return list(points)
 
@@ -93,6 +95,7 @@ def shortcut_path(
 
 
 def resample_path(points: Sequence[Point2D], spacing: float) -> List[Point2D]:
+    """按弧长重采样，使控制器收到稳定间距的路径点。"""
     if len(points) <= 1:
         return list(points)
 
@@ -136,6 +139,7 @@ def smooth_path_gradient(
     max_iter: int,
     tolerance: float,
 ) -> List[Point2D]:
+    # 平滑点同时受原始路径和相邻点约束；任一新线段碰撞则保留旧点。
     if len(points) <= 2:
         return list(points)
 
@@ -173,6 +177,7 @@ def smooth_path_gradient(
 
 
 def compute_center_diff_yaw(points: Sequence[Point2D]) -> List[PathPoint]:
+    """用中心差分计算每个路径点的切向 yaw，首尾使用单边差分。"""
     result = []
     for index, (x, y) in enumerate(points):
         if len(points) == 1:
@@ -203,6 +208,7 @@ def process_path(
     collision_check_step: float,
     is_occupied: Optional[CollisionChecker],
 ) -> List[PathPoint]:
+    """按捷径、重采样、碰撞约束平滑的顺序处理全局路径。"""
     points = [(float(x), float(y)) for x, y in raw_points]
     if len(points) <= 1:
         return compute_center_diff_yaw(points)
@@ -224,6 +230,7 @@ def process_path(
 
 
 def path_to_ros_msg(points: Iterable[PathPoint], frame_id: str, stamp):
+    # Path 中的位置和 yaw 都沿用全局 frame；四元数只编码平面航向。
     from geometry_msgs.msg import PoseStamped
     from nav_msgs.msg import Path
 

@@ -18,6 +18,8 @@ class ObstacleMemory:
     are not free-space observations. The caller bounds the ray lengths/count.
     ``clear`` explicitly starts a fresh session; there is no time-based expiry.
     """
+    # 障碍点以固定 ``memory_frame`` 中的体素中心保存；只有经过多次射线
+    # 清空确认才删除体素，因此单帧漏检不会让规划器误以为道路已经畅通。
 
     def __init__(self, resolution=0.10, max_voxels=60000,
                  clear_confirmations=3, endpoint_margin=0.15,
@@ -93,6 +95,7 @@ class ObstacleMemory:
         between confirmations, as needed for non-repeating LiDAR scan patterns.
         Current hits and nearby return endpoints always override free evidence.
         """
+        # 一次 observe 对应一个时间戳快照；输入无效或时间不递增时保持旧记忆。
         origin = self._point(origin_xyz)
         try:
             stamp = float(stamp)
@@ -160,6 +163,7 @@ class ObstacleMemory:
         if free_keys or self._free_streaks:
             for point in itertools.chain(protected, occupied):
                 endpoint_bins.setdefault(self._key(point), []).append(point)
+        # 非重复扫描中的漏点不能证明障碍消失，必须累计足够的自由空间证据。
         # Missing a voxel in a non-repeating scan is not new occupancy evidence.
         # Retain recent free confirmations; hits still cancel them immediately.
         next_streaks = {key: count for key, count in self._free_streaks.items()

@@ -31,6 +31,13 @@ from .start_recovery import forward_exit
 
 
 class PathFollower:
+    """局部跟踪主节点：接收 map 路径，经过 TF/障碍门控后发布 ``cmd_vel``。
+
+    全局路径使用 ``global_frame``；动态记忆保存在 ``memory_frame`` 后投影
+    到该帧。控制器读取机器人在全局帧的位姿，输出仅限线速度 x 与角速度 z。
+    任何定位、动态点云、静态地图
+    或扫掠碰撞检查不满足条件时，统一走 ``publish_stop``。
+    """
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._plan_generation = 0
@@ -319,6 +326,7 @@ class PathFollower:
         return rospy.Time.now().to_sec()
 
     def get_frame_pose(self, frame: str) -> Optional[Pose2D]:
+        # TF 查询目标固定为 global_frame；时间戳过期或未来数据都不能用于控制。
         if self.require_localization:
             with self._lock:
                 ready = (self.localization_valid and self.localization_received is not None
@@ -428,6 +436,7 @@ class PathFollower:
         )
 
     def request_plan(self, robot_pose: Pose2D, kind: str) -> bool:
+        # 每次规划递增 generation，旧线程返回时会被丢弃，避免旧路径覆盖新目标。
         planning_pose = self.get_planning_pose(robot_pose)
         if planning_pose is None:
             rospy.logwarn("Cannot plan: planning frame '%s' unavailable", self.planning_frame)
@@ -473,6 +482,7 @@ class PathFollower:
         return True
 
     def _plan_worker(self, request, kind: str, generation: int, overlay_stamp) -> None:
+        # 先等待 A* 确认同一份动态障碍快照，再接受服务结果。
         recovery = None
         try:
             if self.require_overlay_ack:
@@ -611,6 +621,7 @@ class PathFollower:
         return path, recovery
 
     def process_planned_path(self, raw_points: List[Point2D]) -> List[PathPoint]:
+        # 后处理沿用 global_frame，并把会话内动态记忆纳入每一次碰撞查询。
         # Include the local memory snapshot even before a costmap callback
         # arrives, so shortcuts cannot erase a freshly planned obstacle detour.
         obstacle_points = self.dedup_dynamic_history_points()
@@ -881,6 +892,8 @@ class PathFollower:
                     % (elapsed, self.control_dt))
 
     def _control_loop(self, _event) -> None:
+        # 控制周期的安全顺序：位姿/数据新鲜度 -> 紧急包络 -> 重规划状态
+        # -> 路径跟踪 -> publish_cmd 内的扫掠和实测制动复核。
         robot_pose = self.get_robot_pose()
         if robot_pose is None:
             self.dynamic_layer.publish_markers()
@@ -1117,6 +1130,7 @@ class PathFollower:
 
     def publish_cmd(self, velocity_x, velocity_y, velocity_yaw, robot_pose=None,
                     generation=None, allow_stale_dynamic=False) -> bool:
+        # 所有最终指令必须经过定位、动态新鲜度、静态地图和车辆 footprint 检查。
         if (not all(math.isfinite(value) for value in (velocity_x, velocity_y, velocity_yaw))
                 or abs(velocity_y) > 1e-9):
             self.publish_stop()

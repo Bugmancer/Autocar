@@ -12,6 +12,7 @@ def get_param(source, name, default):
 
     getter = getattr(source, "get_param", None)
     if getter is not None:
+        # ROS1 参数优先取节点私有命名空间；控制器本身不依赖 rospy。
         try:
             return getter("~" + name, default)
         except TypeError:
@@ -19,6 +20,7 @@ def get_param(source, name, default):
 
     getter = getattr(source, "get_parameter", None)
     if getter is not None:
+        # 兼容提供 ROS2 风格参数接口的调用者，解包 Parameter.value。
         try:
             value = getter(name)
             return getattr(value, "value", value)

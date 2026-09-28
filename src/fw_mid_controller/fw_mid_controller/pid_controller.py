@@ -46,6 +46,7 @@ class PIDPathController:
         self.reset()
 
     def reset(self) -> None:
+        # 换路径或停止跟踪时清掉积分、差分历史及上一条指令，避免状态沿用。
         self.x_integral = 0.0
         self.prev_x_error = 0.0
         self.yaw_integral = 0.0
@@ -68,6 +69,7 @@ class PIDPathController:
         return float(getattr(point, "yaw", 0.0))
 
     def compute(self, robot_pose: Pose2D, global_path: Sequence, target, dt: float):
+        """由同一世界坐标系中的位姿/目标计算 (vx, vy, wz)，单位 m/s、m/s、rad/s。"""
         if not global_path or target is None:
             self.reset()
             return 0.0, 0.0, 0.0
@@ -79,16 +81,19 @@ class PIDPathController:
 
         dx = tx - rx
         dy = ty - ry
+        # 将目标偏差转到车体坐标：纵向误差只驱动前进，横向偏差参与转向。
         x_body = math.cos(yaw) * dx + math.sin(yaw) * dy
         y_body = -math.sin(yaw) * dx + math.cos(yaw) * dy
         x_error = max(0.0, x_body)
         lateral_error = math.atan2(y_body, max(0.05, x_body))
         heading_error = normalize_angle(target_yaw - yaw)
+        # 同时靠近目标点并对齐路径切线；归一化角差避免跨越 +/-pi 时突变。
         yaw_error = normalize_angle(heading_error + self.kp_lateral * lateral_error)
         if abs(yaw_error) < self.yaw_deadband:
             yaw_error = 0.0
 
         dt = max(float(dt), 1e-3)
+        # 限制积分累积，并为差分项设置最小周期，避免极短周期放大噪声。
         self.x_integral = clamp(
             self.x_integral + x_error * dt,
             -self.integral_limit,
@@ -122,6 +127,7 @@ class PIDPathController:
             vx = self.cruise_speed if x_body > 0 else 0.0
         if goal_dist < self.approach_dist:
             vx *= clamp(goal_dist / max(self.approach_dist, 1e-3), 0.15, 1.0)
+        # 大角差时目标线速度置零；最终指令仍会经过下面的变化率限制。
         if abs(yaw_error) > self.stop_rotate_yaw:
             vx = 0.0
         else:
@@ -131,6 +137,7 @@ class PIDPathController:
             vx = self.min_vx
 
         prev_vx, prev_wz = self.prev_cmd
+        # 这里只限制指令变化率；碰撞与实测制动距离由上层发布指令前复核。
         vx = self.limit_rate(vx, prev_vx, self.accel_limit_v, dt)
         wz = self.limit_rate(wz, prev_wz, self.accel_limit_wz, dt)
         if abs(vx) < self.deadband_v:

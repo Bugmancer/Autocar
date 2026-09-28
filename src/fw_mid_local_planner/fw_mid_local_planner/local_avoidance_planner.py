@@ -16,6 +16,7 @@ def _get_param(source, name, default):
 
 
 class LocalAvoidancePlanner:
+    """在机器人 body frame 生成短绕行点，再转换回全局地图坐标。"""
     def __init__(self, params=None) -> None:
         self.x_min = float(_get_param(params, "local_replan_trigger_x_min", 0.10))
         self.x_max = float(_get_param(params, "local_replan_trigger_x_max", 1.20))
@@ -35,6 +36,7 @@ class LocalAvoidancePlanner:
         ).lower()
 
     def filter_front_obstacles(self, local_points: List[Point2D]) -> List[Point2D]:
+        # x 向前、y 向左；只在配置的前方窗口内考虑局部绕行触发。
         return [
             (x, y)
             for x, y in local_points
@@ -45,6 +47,7 @@ class LocalAvoidancePlanner:
         return len(self.filter_front_obstacles(local_points)) >= self.min_points
 
     def choose_side(self, front_points: List[Point2D], target_body_y: float = 0.0) -> int:
+        # 返回 +1 左绕、-1 右绕；优先选择点更少的一侧以保留净空。
         if self.prefer_side == "left":
             return 1
         if self.prefer_side == "right":
@@ -63,6 +66,7 @@ class LocalAvoidancePlanner:
         local_points: List[Point2D],
         current_target: Optional[Point2D] = None,
     ) -> List[Point2D]:
+        # 生成 body frame 的“绕开-越过-回到中心线”三点，再统一转到 map frame。
         front_points = self.filter_front_obstacles(local_points)
         if len(front_points) < self.min_points:
             return []

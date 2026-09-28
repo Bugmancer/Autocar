@@ -10,6 +10,8 @@ from ._params import get_param
 
 
 class PurePursuitController:
+    """以车体坐标中的前视点计算曲率，只输出前进和转向指令。"""
+
     def __init__(self, params=None, cruise_speed=None) -> None:
         self.cruise_speed = None if cruise_speed is None else float(cruise_speed)
         if self.cruise_speed is not None and (
@@ -47,6 +49,7 @@ class PurePursuitController:
         dt: float,
         obstacle_speed_scale: float = 1.0,
     ):
+        """输入位姿与路径须在同一坐标系；输出 (vx, 0, wz) 使用 m/s 和 rad/s。"""
         if not path or target is None:
             self.reset()
             return 0.0, 0.0, 0.0
@@ -54,6 +57,7 @@ class PurePursuitController:
         rx, ry, yaw = robot_pose
         dx = float(target.x) - rx
         dy = float(target.y) - ry
+        # 前视点先转到车体平面；圆弧曲率 k = 2*y/L^2，左侧目标对应正曲率。
         x_body = math.cos(yaw) * dx + math.sin(yaw) * dy
         y_body = -math.sin(yaw) * dx + math.cos(yaw) * dy
         ld2 = max(x_body * x_body + y_body * y_body, 1e-4)
@@ -67,6 +71,7 @@ class PurePursuitController:
         if goal_dist < self.approach_dist:
             vx *= clamp(goal_dist / max(self.approach_dist, 1e-3), 0.15, 1.0)
         curvature_scale = 1.0 / (1.0 + self.curvature_slowdown * abs(curvature))
+        # 弯道与障碍接近程度共同调节候选速度，最终停车决策由上层安全检查负责。
         vx *= clamp(curvature_scale, 0.20, 1.0)
         vx *= clamp(obstacle_speed_scale, 0.0, 1.0)
 
@@ -78,6 +83,7 @@ class PurePursuitController:
             vx = self.min_vx
 
         wz = clamp(vx * curvature + self.heading_gain * heading_error, -self.max_wz, self.max_wz)
+        # v*k 给出圆弧角速度，额外航向项对齐路径切线，再限制每周期指令变化。
         dt = max(float(dt), 1e-3)
         prev_vx, prev_wz = self.prev_cmd
         vx = self.limit_rate(vx, prev_vx, self.accel_limit_v, dt)

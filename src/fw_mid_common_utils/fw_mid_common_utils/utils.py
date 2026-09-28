@@ -4,6 +4,9 @@
 The functions in this module deliberately do not import rospy or message
 types.  They can therefore be exercised on a development machine without a
 running ROS master.
+
+平面位姿约定为 (x, y, yaw)：位置单位为米，角度为弧度；车体坐标
+x 向前、y 向左，正 yaw 绕 z 轴逆时针。调用者负责提供同一时刻的位姿。
 """
 
 import math
@@ -45,6 +48,7 @@ def quaternion_to_yaw(x: float, y: float, z: float, w: float) -> float:
 
 def body_to_map(robot_pose: Pose2D, point_body: Point2D) -> Point2D:
     """Transform a planar point from the robot frame into the map frame."""
+    # p_map = R(yaw) * p_body + t；robot_pose 是车体原点在 map 中的位姿。
     rx, ry, yaw = robot_pose
     bx, by = point_body
     c = math.cos(yaw)
@@ -54,6 +58,7 @@ def body_to_map(robot_pose: Pose2D, point_body: Point2D) -> Point2D:
 
 def map_to_body(robot_pose: Pose2D, point_map: Point2D) -> Point2D:
     """Transform a planar point from map coordinates into the robot frame."""
+    # 逆变换先减去平移，再乘 R 的转置，得到相对于车头方向的前后/左右距离。
     rx, ry, yaw = robot_pose
     mx, my = point_map
     dx = mx - rx

@@ -8,6 +8,7 @@
 #include <pcl/filters/filter.h>
 #include <pcl/io/pcd_io.h>
 
+// 自有配准包装层：管理两级降采样与收敛门限，ICP 数值求解由 PCL 提供。
 ICPLocalizer::ICPLocalizer(const ICPConfig &config)
     : config_(config),
       refine_input_(new CloudType),
@@ -70,6 +71,7 @@ bool ICPLocalizer::loadMap(const std::string &path, std::string *error_message)
         return false;
     }
 
+    // 两级目标点云均构建成功后再替换，加载失败时保留上一份有效地图。
     refine_target_.swap(refine_target);
     rough_target_.swap(rough_target);
     return true;
@@ -88,6 +90,7 @@ void ICPLocalizer::setInput(const CloudType::ConstPtr &cloud)
 
 bool ICPLocalizer::align(M4F &guess)
 {
+    // guess 输入为 body -> map 初值，只有粗配准和精配准都通过时才回写结果。
     last_rough_score_ = std::numeric_limits<double>::infinity();
     last_refine_score_ = std::numeric_limits<double>::infinity();
     if (refine_input_->empty() || rough_input_->empty() ||
@@ -96,6 +99,7 @@ bool ICPLocalizer::align(M4F &guess)
         return false;
     }
 
+    // 先用较稀疏点云扩大收敛范围，再把粗配准结果作为精配准初值。
     CloudType aligned_cloud;
     rough_icp_.setMaximumIterations(config_.rough_max_iteration);
     rough_icp_.setInputSource(rough_input_);
@@ -113,6 +117,7 @@ bool ICPLocalizer::align(M4F &guess)
     refine_icp_.setInputTarget(refine_target_);
     refine_icp_.align(aligned_cloud, rough_icp_.getFinalTransformation());
     last_refine_score_ = refine_icp_.getFitnessScore();
+    // hasConverged 只反映迭代停止；还需通过有限数与 fitness 门限检查。
     if (!refine_icp_.hasConverged() || !std::isfinite(last_refine_score_) ||
         last_refine_score_ > config_.refine_score_thresh)
     {

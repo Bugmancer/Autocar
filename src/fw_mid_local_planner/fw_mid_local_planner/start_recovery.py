@@ -9,6 +9,7 @@ from .path_processing import PathPoint
 
 @dataclass(frozen=True)
 class StartRecovery:
+    """在起点落入膨胀区时保存一段已经验证过的直行前缀。"""
     start: tuple
     distance: float
     speed: float
@@ -27,6 +28,7 @@ def forward_exit(start, checker, obstacles, occupied, is_inflated,
     No cells are cleared. Unknown/static occupied space remains blocked, and
     callers must obtain a normal global route from the exit before executing.
     """
+    # 该策略只离开保守膨胀区，不清除障碍、不跳过原始栅格和动态障碍检查。
     if diagnostics is None:
         diagnostics = {}
     diagnostics['reason'] = 'invalid input or start not inflated'
