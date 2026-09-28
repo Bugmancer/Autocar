@@ -25,6 +25,75 @@ roslaunch fw_mid_bringup navigation.launch \
 相关参数以 `apf_` 开头，默认值在 `config/local_planner.yaml` 中；原有
 `path_follower_node.py` 仍是默认跟踪器。
 
+## 切换跟踪器
+
+两个跟踪器都使用节点名 `/path_follower_node`，并向同一个 `/cmd_vel` 发布速度。
+切换前先在当前 `roslaunch` 终端按 `Ctrl-C` 停止整套导航；不要让两个跟踪器同时运行。
+如果原来的启动终端已经关闭，可以先执行：
+
+```bash
+cd /home/robot/Autocar_v1
+bash scripts/ros1.sh rosnode kill /path_follower_node
+```
+
+首次使用 v1，或修改了 Python 代码、`CMakeLists.txt` 后，需要重新构建并加载工作区：
+
+```bash
+cd /home/robot/Autocar_v1
+bash scripts/ros1.sh catkin_make --pkg fw_mid_local_planner
+source devel/setup.bash
+```
+
+### 切换到 v1 人工势场跟踪
+
+只启动局部规划器时，先确保 A* 已运行，再执行：
+
+```bash
+roslaunch fw_mid_local_planner local_planner.launch \
+  follower_node:=path_follower_node_v1.py
+```
+
+完整导航使用同一个参数：
+
+```bash
+roslaunch fw_mid_bringup navigation.launch \
+  follower_node:=path_follower_node_v1.py
+```
+
+启动日志出现 `APF v1 tracking enabled` 后，才向 `/move_base_simple/goal` 或
+`/goal_pose` 发布目标。v1 仍使用原来的点云障碍记忆、A* 动态 overlay、重规划服务和
+车身碰撞检查；进入 `apf_danger_clearance` 危险区时直接发布零速度驻车。
+
+### 切回原来的跟踪器
+
+先按上面的步骤停止当前 launch，然后显式选择原节点：
+
+```bash
+roslaunch fw_mid_local_planner local_planner.launch \
+  follower_node:=path_follower_node.py
+```
+
+完整导航对应为：
+
+```bash
+roslaunch fw_mid_bringup navigation.launch \
+  follower_node:=path_follower_node.py
+```
+
+`follower_node` 的默认值就是 `path_follower_node.py`，因此省略该参数也会回到原来的
+PID/Pure Pursuit 跟踪器：
+
+```bash
+roslaunch fw_mid_local_planner local_planner.launch
+```
+
+切换后可用下面的命令确认 `/cmd_vel` 只有一个发布者；如果仍有多个发布者，先停止
+多余的 launch，再继续发送目标：
+
+```bash
+bash scripts/ros1.sh rostopic info /cmd_vel
+```
+
 v1 的力与速度计算位于 `fw_mid_local_planner/potential_field.py`，不依赖 ROS；
 `path_follower_node_v1.py` 负责复用原节点和发布诊断。第一目标为裁剪后首个
 未到达点，第二目标为向前间隔 `apf_waypoint_stride` 个点的位置；仅剩终点时

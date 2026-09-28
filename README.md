@@ -244,6 +244,42 @@ bash scripts/ros1.sh rosrun rviz rviz -d "$(rospack find fw_mid_localizer)/rviz/
 
 重新启动前确认旧 Livox/CAN 节点已退出，再启动一次并重新检查定位、重新发送目标。网络地址迁移不会随 launch 退出而回滚。LIO 遇到时间回退（例如循环回放 bag）也需要重启，不能继续使用前一时钟周期的滤波状态。
 
+#### 切换局部跟踪器
+
+局部规划器的两个入口都使用 `/path_follower_node` 和 `/cmd_vel`。切换前先在当前
+`roslaunch` 终端按 `Ctrl-C` 停止导航，不能同时启动两个跟踪器；若启动终端已关闭，
+可先执行 `bash scripts/ros1.sh rosnode kill /path_follower_node`。首次使用 v1 或
+修改代码后，在工作区重新构建并加载环境：
+
+```bash
+cd /home/robot/Autocar_v1
+bash scripts/ros1.sh catkin_make --pkg fw_mid_local_planner
+source devel/setup.bash
+```
+
+切换到实验性的人工势场跟踪器：
+
+```bash
+roslaunch fw_mid_bringup navigation.launch follower_node:=path_follower_node_v1.py
+```
+
+只调试局部规划器时使用：
+
+```bash
+roslaunch fw_mid_local_planner local_planner.launch follower_node:=path_follower_node_v1.py
+```
+
+启动日志出现 `APF v1 tracking enabled` 后再发送目标。切回原来的 PID/Pure Pursuit
+跟踪器时，停止当前 launch 后将参数改为 `path_follower_node.py`：
+
+```bash
+roslaunch fw_mid_bringup navigation.launch follower_node:=path_follower_node.py
+```
+
+省略 `follower_node` 也会使用旧节点，因为两个 launch 的默认值都是
+`path_follower_node.py`。切换后可执行 `bash scripts/ros1.sh rostopic info /cmd_vel`，
+确认只有一个发布者。
+
 #### 保存下次启动使用的初值
 
 当前定位正常时，把车停在下次准备启动的位置，保持定位节点运行，在另一个终端执行：
@@ -491,7 +527,9 @@ bash scripts/ros1.sh rosservice call /path_follower_node/clear_obstacle_memory "
 
 代码与参数修改后需在车辆停稳时重启导航生效，正在运行的节点不会自动热更新。
 
-`obstacle_memory.py` 和 `footprint_collision.py` 均不依赖 A* 或 PID。以后接入 A* + 人工势场法时，可复用同一障碍记忆，并让新的速度输出继续经过车身碰撞检查；主要修改控制和局部避障策略。
+`obstacle_memory.py` 和 `footprint_collision.py` 均不依赖 A* 或 PID。当前实验性的
+A* + 人工势场跟踪器复用这两层，新的速度输出继续经过统一的车身碰撞检查；算法参数、
+危险区驻车行为和切换命令见 `src/fw_mid_local_planner/README.md`。
 
 ### 7.3 Twist 到 JSON
 
