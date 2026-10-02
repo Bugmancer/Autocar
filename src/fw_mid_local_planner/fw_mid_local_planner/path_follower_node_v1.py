@@ -54,6 +54,8 @@ class APFPathFollower(PathFollower):
             self.param("apf_near_attraction_gain", 1.0))
         self.apf_far_attraction_gain = float(
             self.param("apf_far_attraction_gain", 0.35))
+        self.apf_farther_attraction_gain = float(
+            self.param("apf_farther_attraction_gain", 0.20))
         self.apf_repulsive_gain = float(self.param("apf_repulsive_gain", 0.08))
         self.apf_obstacle_influence_distance = float(
             self.param("apf_obstacle_influence_distance", 0.90))
@@ -118,7 +120,8 @@ class APFPathFollower(PathFollower):
             return
         super()._control_loop(event)
         with self._lock:
-            if (self.apf_controller.status != "force_cancelled" or not self.global_path
+            if (self.apf_controller.status not in ("force_cancelled", "danger_zone")
+                    or not self.global_path
                     or self.goal_pose is None or self.dynamic_avoidance_mode != "astar_replan"):
                 self._apf_stall_since = None
                 return

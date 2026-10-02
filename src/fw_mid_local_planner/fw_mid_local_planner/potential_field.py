@@ -61,13 +61,48 @@ class ArtificialPotentialFieldController:
         self.prev_cmd = tuple(synced)
         self.last_command = (vx, wz)
 
-    def _targets(self, path):
+    def _targets(self, path, robot_pose):
+        """选择吸引点，智能跳过已偏离的路径点。
+
+        返回三个吸引点：近点、远点、更远点。
+        当车辆因避障偏离A*路径较远时，不再强制回头追第一个路径点，
+        而是选择更前方、在车辆前进方向上的路径点作为吸引点。
+        """
         if not path:
-            return None, None
-        second = min(self.follower.apf_waypoint_stride, len(path) - 1)
-        # The parent already removes reached points. Do not count a lone
-        # endpoint twice: its attraction stays at the near-goal strength.
-        return path[0], path[second] if second else None
+            return None, None, None
+
+        rx, ry, yaw = robot_pose
+        cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
+
+        # 寻找第一个合适的近点：在车辆前方且不需要大幅回头
+        near_idx = 0
+        for i in range(min(len(path), self.follower.apf_waypoint_stride * 2)):
+            px, py = self._point_xy(path[i])
+            # 计算路径点相对车辆的位置
+            dx, dy = px - rx, py - ry
+            # 投影到车身坐标系：forward为前方距离
+            forward = dx * cos_yaw + dy * sin_yaw
+            distance = math.hypot(dx, dy)
+
+            # 如果点在车辆后方或需要大幅回头，且还有更前方的点，则跳过
+            if i < len(path) - 1 and (forward < -0.3 or (forward < 0 and distance > 0.5)):
+                continue
+
+            # 找到第一个可接受的点
+            near_idx = i
+            break
+
+        # 远点：在近点基础上加stride
+        far_idx = min(near_idx + self.follower.apf_waypoint_stride, len(path) - 1)
+
+        # 更远点：在远点基础上再加stride
+        farther_idx = min(far_idx + self.follower.apf_waypoint_stride, len(path) - 1)
+
+        near = path[near_idx]
+        far = path[far_idx] if far_idx > near_idx else None
+        farther = path[farther_idx] if farther_idx > far_idx else None
+
+        return near, far, farther
 
     def _age_weight(self, stamp, now):
         p = self.follower
@@ -132,10 +167,11 @@ class ArtificialPotentialFieldController:
             # object. A pending request alone must not reset the filter.
             self.last_force = self.last_heading = None
             self._path_end = path[-1]
-        near, far = self._targets(path)
+        near, far, farther = self._targets(path, robot_pose)
         ax = ay = 0.0
         for target, gain in ((near, p.apf_near_attraction_gain),
-                             (far, p.apf_far_attraction_gain)):
+                             (far, p.apf_far_attraction_gain),
+                             (farther, p.apf_farther_attraction_gain)):
             if target is None:
                 continue
             tx, ty = self._point_xy(target)
@@ -174,12 +210,24 @@ class ArtificialPotentialFieldController:
         norm = math.hypot(*raw)
         if not math.isfinite(norm):
             return self._zero("invalid_force")
+
+        # 危险区域降速策略：不驻车，而是降速并沿当前方向缓行
+        danger_speed_scale = 1.0
         if self.nearest_clearance <= p.apf_danger_clearance:
             self.status = "danger_zone"
-            self.last_force = self.last_heading = None
-            self.prev_cmd = self.last_command = (0.0, 0.0)
-            return 0.0, 0.0, 0.0
-        if norm < p.apf_force_epsilon:
+            # 使用线性插值：clearance从0到danger_clearance，速度从10%到100%
+            danger_speed_scale = max(0.10, self.nearest_clearance / max(0.01, p.apf_danger_clearance))
+            # 在危险区域时，继续使用吸引力方向（忽略斥力），避免原地打转
+            if norm < p.apf_force_epsilon:
+                # 如果合力为零，则使用纯吸引力方向
+                raw = (ax, ay)
+                norm = math.hypot(*raw)
+                if norm < p.apf_force_epsilon:
+                    # 连吸引力都没有，才真正停止
+                    self.last_force = self.last_heading = None
+                    self.prev_cmd = self.last_command = (0.0, 0.0)
+                    return 0.0, 0.0, 0.0
+        elif norm < p.apf_force_epsilon:
             return self._zero("force_cancelled")
 
         # Filter vectors, not angles, to avoid discontinuity at +/- pi.
@@ -200,23 +248,47 @@ class ArtificialPotentialFieldController:
         gx, gy = self._point_xy(path[-1])
         goal_distance = math.hypot(gx - rx, gy - ry)
         speed = p.command_max_vx
+        speed_reason = "full_speed"
+
         if goal_distance < p.apf_goal_approach_distance:
             speed *= max(p.apf_min_speed_scale, goal_distance / p.apf_goal_approach_distance)
+            speed_reason = "goal_approach"
+
         if turn_error >= p.apf_stop_rotate_yaw:
-            speed = 0.0
+            speed *= p.apf_min_speed_scale  # 保持最低速度而不是完全停止
+            speed_reason = "large_turn"
         else:
             speed *= max(p.apf_min_speed_scale, 1.0 - turn_error / p.apf_slowdown_yaw)
+            if turn_error > p.apf_slowdown_yaw * 0.5:
+                speed_reason = "turn_slowdown"
+
         if 0.0 < speed < p.apf_min_vx and goal_distance > 0.25:
             speed = min(p.command_max_vx, p.apf_min_vx)
+            speed_reason = "min_vx_enforced"
+
+        # 应用危险区域降速系数
+        if danger_speed_scale < 1.0:
+            speed_reason = f"danger_zone_{danger_speed_scale:.2f}"
+        speed *= danger_speed_scale
+
         vx = self._limit_rate(speed, self.prev_cmd[0], p.apf_accel_limit_v, dt)
         wz = max(-p.command_max_wz, min(p.command_max_wz, p.apf_heading_gain * error))
         wz = self._limit_rate(wz, self.prev_cmd[1], p.apf_accel_limit_wz, dt)
         wz = max(-p.command_max_wz, min(p.command_max_wz, wz))
         self.prev_cmd = (vx, wz)
+
         # Preserve the continuous ramp, so a short timestep cannot keep the
         # limiter permanently below the output deadband.
         out_v = 0.0 if vx < p.apf_deadband_v else vx
         out_w = 0.0 if abs(wz) < p.apf_deadband_wz else wz
+
+        # 当输出速度为零时，记录详细原因
+        if out_v < 0.001:
+            rospy.logwarn_throttle(0.5,
+                "APF output ZERO: vx=%.4f deadband=%.3f reason=%s turn_err=%.2f° clearance=%.3fm goal_dist=%.2fm",
+                vx, p.apf_deadband_v, speed_reason, math.degrees(turn_error),
+                self.nearest_clearance, goal_distance)
+
         self.last_command = (out_v, out_w)
         self.status = "tracking"
         return out_v, 0.0, out_w

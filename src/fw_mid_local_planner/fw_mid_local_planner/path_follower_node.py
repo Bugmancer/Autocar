@@ -985,13 +985,30 @@ class PathFollower:
                     self.publish_stop()
                     return
 
-        rx, ry, _ = robot_pose
+        rx, ry, yaw = robot_pose
         with self._lock:
+            # 基于投影的路径点舍去：舍去车辆朝向后方的点，或距离很近的点
             while len(self.global_path) > 1:
                 first = self.global_path[0]
-                if math.hypot(first.x - rx, first.y - ry) >= self.waypoint_tolerance:
+                # 计算车辆到第一个路径点的向量
+                dx = first.x - rx
+                dy = first.y - ry
+                distance = math.hypot(dx, dy)
+
+                # 计算车辆朝向的单位向量
+                cos_yaw = math.cos(yaw)
+                sin_yaw = math.sin(yaw)
+
+                # 将路径点投影到车辆朝向上：forward > 0表示在前方
+                forward_projection = dx * cos_yaw + dy * sin_yaw
+
+                # 舍去条件：
+                # 1. 在车辆后方（投影为负）
+                # 2. 或者距离很近（已经到达）
+                if forward_projection < 0 or distance < self.waypoint_tolerance:
+                    self.global_path.pop(0)
+                else:
                     break
-                self.global_path.pop(0)
             path = list(self.global_path)
             generation = self._plan_generation
         if not path:
@@ -1061,7 +1078,7 @@ class PathFollower:
             # Continue the same control cycle; the new command still passes
             # the current footprint and measured-braking checks in publish_cmd.
             return False
-        if remaining <= 0.0 or abs(lateral) > 0.08 or abs(angle) > 0.25:
+        if remaining <= 0.0 or abs(lateral) > 0.12 or abs(angle) > 0.35:
             with self._lock:
                 if generation != self._plan_generation:
                     return True

@@ -147,8 +147,17 @@ class DynamicObstacleLayer:
         with self._lock:
             generation = self._clear_generation
             if stamp < self._last_processed_stamp:
-                self.input_error = "point cloud clock moved backwards; restart LIO and navigation"
-                return
+                time_jump = (self._last_processed_stamp - stamp).to_sec()
+                if time_jump > 0.5:  # 超过0.5秒认为是严重问题
+                    self.input_error = ("Point cloud clock jumped backwards %.2f s; "
+                                       "clear memory to recover" % time_jump)
+                    rospy.logerr_throttle(2.0, self.input_error)
+                    return
+                else:  # 小幅回跳：警告但继续，清空记忆保持一致性
+                    rospy.logwarn("Point cloud timestamp jumped backwards %.3f s; "
+                                 "clearing memory and continuing" % time_jump)
+                    self.memory.clear()
+                    self._last_processed_stamp = rospy.Time()
             if stamp == self._last_processed_stamp or self.input_error:
                 return
         try:
@@ -355,7 +364,9 @@ class DynamicObstacleLayer:
             return False
         points, _ = self.point_snapshot()
         if self.emergency_stop_mode in ("center_envelope", "center", "point"):
-            return any(x >= self.emergency_x_min and x*x + y*y <= self.center_stop_radius**2
+            # 只检测前方扇形区域，避免后方障碍物触发
+            return any(self.emergency_x_min <= x <= 2.0 * self.center_stop_radius
+                       and x*x + y*y <= self.center_stop_radius**2
                        for x, y in points)
         return any(self.emergency_x_min <= x <= self.emergency_x_max
                    and abs(y) <= self.emergency_y_abs for x, y in points)

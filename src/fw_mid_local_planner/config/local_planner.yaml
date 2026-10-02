@@ -13,34 +13,35 @@ static_map_topic: /astar_planner_node/map
 
 control_rate: 10.0
 lookahead_distance: 0.50
-waypoint_tolerance: 0.25
-goal_tolerance: 0.35
+waypoint_tolerance: 0.20  # 严格：减少路径点提前舍去 (从0.25→0.20m)
+goal_tolerance: 0.28      # 严格：减少目标点提前舍去 (从0.35→0.28m, -20%)
 tracking_controller: pid
 
 # path_follower_node_v1.py: two discrete path targets plus point-cloud APF.
 # The first target has the larger attraction and the second target smooths
 # the direction change. The original node ignores these parameters.
 apf_waypoint_stride: 4
-apf_near_attraction_gain: 1.00
-apf_far_attraction_gain: 0.35
-apf_repulsive_gain: 0.08
-apf_obstacle_influence_distance: 0.90
-apf_repulsive_max_force: 8.0
+apf_near_attraction_gain: 1.50   # 第一个点（近点）：最强吸引力
+apf_far_attraction_gain: 1.20    # 第二个点（远点）：次强吸引力 (从1.00→1.20)
+apf_farther_attraction_gain: 0.80  # 第三个点（更远点）：第三档吸引力，帮助向前看
+apf_repulsive_gain: 0.015       # 再次大幅降低：进一步削弱斥力 (从0.03→0.015, -50%)
+apf_obstacle_influence_distance: 0.60  # 大幅缩小：只有很近的障碍物才产生斥力 (从0.90→0.60m)
+apf_repulsive_max_force: 3.0    # 再次降低：限制最大斥力 (从4.5→3.0, -33%)
 apf_max_obstacles: 300
 apf_heading_gain: 1.80
-apf_stop_rotate_yaw: 1.45
-apf_slowdown_yaw: 1.00
+apf_stop_rotate_yaw: 1.85  # 进一步增加：允许更大角度偏差 (从1.45→1.85, ~106°)
+apf_slowdown_yaw: 1.40     # 进一步增加：减少转弯降速 (从1.00→1.40, ~80°)
 apf_goal_approach_distance: 0.80
-apf_min_speed_scale: 0.20
-apf_min_vx: 0.04
+apf_min_speed_scale: 0.50  # 提高：转弯最低速度 (从0.40→0.50, 即50%)
+apf_min_vx: 0.08           # 提高：最低速度阈值 (从0.04→0.08m/s)
 apf_force_epsilon: 0.0001
-apf_accel_limit_v: 0.25
-apf_accel_limit_wz: 0.30
-apf_deadband_v: 0.015
-apf_deadband_wz: 0.025
+apf_accel_limit_v: 0.50    # 提高：允许更快的加速 (从0.25→0.50m/s²)
+apf_accel_limit_wz: 0.50   # 提高：允许更快的角加速 (从0.30→0.50rad/s²)
+apf_deadband_v: 0.010      # 降低：减少速度死区 (从0.015→0.010m/s)
+apf_deadband_wz: 0.020     # 降低：减少角速度死区 (从0.025→0.020rad/s)
 # Danger clearance is measured from the padded rectangular body, less the
 # obstacle voxel radius, NOT distance from base_link. Entering it parks.
-apf_danger_clearance: 0.05
+apf_danger_clearance: 0.01  # 进一步降低：只有非常近才触发 (从0.05→0.01m)
 # Vector low-pass time constant in seconds; 0 disables filtering.
 apf_force_filter_time: 0.20
 # Recent observations retain full weight for dynamic_obstacle_timeout.
@@ -94,7 +95,7 @@ pp_deadband_wz: 0.025
 
 enable_dynamic_obstacles: true
 dynamic_cloud_topic: /fastlio2/body_cloud
-dynamic_obstacle_timeout: 0.50
+dynamic_obstacle_timeout: 0.80  # 增加：允许更长的处理时间 (从0.50→0.80s)
 # New obstacle hits must be inside this base_link box; RViz shows its boundary.
 dynamic_x_min: -1.50
 dynamic_x_max: 2.50
@@ -137,10 +138,10 @@ dynamic_self_filter_z_max: 0.65
 collision_check_enabled: true
 collision_speed_reduction_enabled: true
 collision_require_static_map: true
-collision_prediction_time: 1.0
-collision_reaction_time: 0.2
-collision_linear_deceleration: 0.25
-collision_angular_deceleration: 0.5
+collision_prediction_time: 0.8      # 降低：减少预测时间 (从1.0→0.8s)
+collision_reaction_time: 0.15       # 降低：减少反应时间 (从0.2→0.15s)
+collision_linear_deceleration: 0.20  # 降低：更慢的减速要求 (从0.25→0.20m/s²)
+collision_angular_deceleration: 0.40 # 降低：更慢的角减速要求 (从0.5→0.40rad/s²)
 start_recovery_enabled: true
 # Includes room to select an exit beyond the inflation boundary.
 start_recovery_max_distance: 1.2
@@ -150,10 +151,10 @@ dynamic_emergency_stop: true
 emergency_stop_mode: center_envelope
 # Early emergency envelope is measured from base_link, not the body edge.
 # The full swept footprint and measured braking checks still apply outside it.
-dynamic_center_stop_radius: 0.40
+dynamic_center_stop_radius: 0.25  # 缩小：减少误触发 (从0.40→0.25m)
 emergency_x_min: 0.00
-emergency_x_max: 0.40
-emergency_y_abs: 0.30
+emergency_x_max: 0.30  # 缩小：只在非常近时紧急停止 (从0.40→0.30m)
+emergency_y_abs: 0.25  # 缩小：减少侧方误触发 (从0.30→0.25m)
 
 dynamic_avoidance_mode: astar_replan
 # Normal obstacle detections keep the existing collision/replan behavior.
