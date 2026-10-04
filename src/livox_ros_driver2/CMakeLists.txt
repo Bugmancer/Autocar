@@ -166,7 +166,7 @@ if(ROS_EDITION STREQUAL "ROS1")
     ${PCL_INCLUDE_DIRS}
     ${APR_INCLUDE_DIRS}
     ${LIVOX_SDK_SOURCE_DIR}/include
-    3rdparty
+    ${LIVOX_SDK_SOURCE_DIR}/3rdparty
     src
   )
 

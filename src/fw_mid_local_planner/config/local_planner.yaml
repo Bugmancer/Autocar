@@ -17,6 +17,38 @@ waypoint_tolerance: 0.20
 goal_tolerance: 0.28
 tracking_controller: pid
 
+# V3 独立读取以下参数；classic/APF 不受其影响，速度上限仍来自 launch。
+# 前视按弧长插值；随车速增加、随预瞄曲率缩短，单位米和秒。
+v3_lookahead_min: 0.25
+v3_lookahead_max: 0.80
+v3_lookahead_time: 1.50
+v3_lookahead_filter_time: 0.30
+v3_curvature_gain: 0.70
+v3_curvature_preview: 1.20
+# 速度规划同时受角速度、横向加速度及剩余路程制动约束。
+v3_lateral_acceleration: 0.25
+v3_accel_v: 0.25
+v3_accel_w: 0.40
+v3_heading_gain: 1.80
+v3_rotate_threshold: 0.90
+v3_goal_approach_distance: 0.60
+# 斥力按矩形车身净距和固定角扇区积分，不随同一面墙的重复点数增加。
+v3_obstacle_influence: 0.65
+v3_repulsive_gain: 1.50
+v3_tangent_gain: 0.80
+v3_obstacle_sectors: 36
+v3_side_hold_time: 1.0
+v3_force_filter_time: 0.15
+v3_deadband_v: 0.005
+v3_deadband_w: 0.010
+# 短轨迹按评分顺序复用足迹/制动检查；达到预算后无可用候选即停车。
+# 时间预算在每次完整检查之间判断，不中断一次已开始的碰撞查询。
+v3_trajectory_max_checks: 9
+v3_trajectory_time_budget: 0.04
+# 按实际沿路径前进距离判断停滞，正常原地转向另用实际航向变化识别。
+v3_stall_time: 4.0
+v3_stall_progress: 0.025
+
 # APF 使用最多三个路径目标的吸引力与点云障碍斥力；经典策略忽略以下 apf_* 参数。
 apf_waypoint_stride: 4
 apf_near_attraction_gain: 1.50

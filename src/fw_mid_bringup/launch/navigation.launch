@@ -13,9 +13,9 @@
   <arg name="can_interface" default="can0" />
   <arg name="max_vx" default="0.05" />
   <arg name="max_wz" default="5.0" />
-  <!-- 两个独立跟随节点二选一；follower_node 保留旧调用兼容并可覆盖策略映射。 -->
+  <!-- 三个独立跟随节点三选一；follower_node 保留旧调用兼容并可覆盖策略映射。 -->
   <arg name="follower_variant" default="classic" />
-  <arg name="follower_node" default="$(eval {'classic': 'path_follower_node.py', 'apf': 'path_follower_node_v1.py'}[arg('follower_variant')])" />
+  <arg name="follower_node" default="$(eval {'classic': 'path_follower_node.py', 'apf': 'path_follower_node_v1.py', 'v3': 'path_follower_node_v3.py'}[arg('follower_variant')])" />
   <arg name="body_to_base_link" default="0.28991 0.0 -0.81317 0.0 -0.785398 0.0" />
   <arg name="lio_config" default="$(find fw_mid_fastlio2)/config/lio.yaml" />
   <arg name="localizer_config" default="$(find fw_mid_localizer)/config/localizer.yaml" />

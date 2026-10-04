@@ -48,7 +48,6 @@ class ObstacleMemory:
         self._free_stamps = {}
         self._last_stamp: Optional[float] = None
         self._overflowed = False
-        self._revision = 0
         # 先按邻居中心到射线穿过体素的距离筛选偏移；接受清空证据前，
         # 还会检查邻居中心到实际射线的距离，避免仅凭邻接关系删除障碍。
         reach = int(math.floor(self._clear_neighbor_radius / self._resolution + .5 + 1e-12))
@@ -65,17 +64,12 @@ class ObstacleMemory:
         """容量不足标志一旦置位就保持，只有显式清空才能解除。"""
         return self._overflowed
 
-    @property
-    def revision(self):
-        return self._revision
-
     def clear(self):
         self._voxels.clear()
         self._free_streaks.clear()
         self._free_stamps.clear()
         self._last_stamp = None
         self._overflowed = False
-        self._revision += 1
 
     def snapshot(self) -> List[Tuple[float, float, float, float]]:
         """返回 ``(x, y, z, stamp)`` 列表，位置为体素中心，时间为最近占用观测秒数。"""
@@ -109,14 +103,11 @@ class ObstacleMemory:
         protected = (endpoints if protected_endpoints_xyz is None else
                      endpoints + self._valid_points(protected_endpoints_xyz))
         hit_keys = {self._key(point) for point in occupied}
-        changed = False
         for key in hit_keys:
             if key in self._voxels or len(self._voxels) < self._max_voxels:
                 self._voxels[key] = stamp
-                changed = True
             elif not self._overflowed:
                 self._overflowed = True
-                changed = True
 
         free_keys: Set[VoxelKey] = set()
         candidates = self._voxels.keys() - hit_keys
@@ -177,14 +168,11 @@ class ObstacleMemory:
                 del self._voxels[key]
                 next_streaks.pop(key, None)
                 next_stamps.pop(key, None)
-                changed = True
             else:
                 next_streaks[key] = streak
                 next_stamps[key] = stamp
         self._free_streaks = next_streaks
         self._free_stamps = next_stamps
-        if changed:
-            self._revision += 1
         return True
 
     def _relevant_endpoints(self, origin, endpoints, candidates):

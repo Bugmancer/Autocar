@@ -6,14 +6,14 @@ ROS1 Noetic 车载导航工作区：MID360 -> FAST-LIO2 -> PCD 定位 -> A* -> �
 
 ## 构建
 
-下列命令在车机 Linux 上执行，示例工作区为 `/home/robot/Autocar_v1`，按实际路径替换。需要 ROS Noetic、catkin、Python 3、C++14、PCL、Eigen3、yaml-cpp、Boost、NumPy、OpenCV 和 PyYAML；包级依赖见各 `package.xml`。Livox SDK2 和 `python-can` 已随项目提供。
+下列命令在车机 Linux 上执行，示例工作区为 `/home/robot/Autocar_v1`，按实际路径替换。需要 ROS Noetic、catkin、Python 3、C++14、PCL、Eigen3、yaml-cpp、Boost、NumPy、OpenCV 和 PyYAML；包级依赖见各 `package.xml`。Livox SDK2 和裁剪后的 `python-can` 已随项目提供，CAN 仅保留当前底盘使用的 SocketCAN 内建后端。
 
 ```bash
 cd /home/robot/Autocar_v1
 bash scripts/ros1.sh catkin_make -DCMAKE_BUILD_TYPE=Release -j2
 ```
 
-`scripts/ros1.sh` 只叠加系统 Noetic 和本工作区，避免加载旧工程；后续 ROS 命令也建议通过它运行。复制工作区到其他机器或路径后，重新生成 `build/`、`devel/`、`install/`，不要复用旧路径缓存。代码或配置变更后停车、重建并重启导航。
+`scripts/ros1.sh` 只叠加系统 Noetic 和本工作区，避免加载旧工程；后续 ROS 命令也建议通过它运行。源码不携带编译产物，首次使用或复制到其他机器、路径后执行上方命令，重新生成 `build/`、`devel/`，不要复用旧路径缓存。代码或配置变更后停车、重建并重启导航。
 
 ## 地图与初值
 
@@ -32,7 +32,7 @@ bash scripts/ros1.sh catkin_make -DCMAKE_BUILD_TYPE=Release -j2
 bash scripts/ros1.sh python3 scripts/save_initial_pose.py
 ```
 
-脚本检查定位有效性与数据新鲜度，保存到 `.ros/initial_pose.txt`，失败时保留原文件。保存值仅适用于同一地图、同一停车位置和朝向；关机后车辆被挪动时需要重新给初值。不要把定位日志中的常规 RPY 直接当作非零 roll/pitch 的启动初值。
+脚本检查定位有效性与数据新鲜度，保存到 `.ros/initial_pose.txt`，失败时保留原文件。看到 `Saved map -> body seed to ...` 后再停止导航、关机；系统不会在关机时自动保存，下次启动也需要显式传入保存的 `initial_pose`。保存值仅适用于同一地图、同一停车位置和朝向；关机后车辆被挪动时需要重新给初值。不要把定位日志中的常规 RPY 直接当作非零 roll/pitch 的启动初值。
 
 ## 启动导航
 
@@ -61,10 +61,24 @@ test -s .ros/initial_pose.txt && bash scripts/with_mid360_network.sh roslaunch f
 | --- | --- | --- |
 | `classic`（默认） | `path_follower_node.py` | PID，或由 `tracking_controller` 选择 Pure Pursuit |
 | `apf` | `path_follower_node_v1.py` | 人工势场 |
+| `v3` | `path_follower_node_v3.py` | 自适应前视、几何斥力与短轨迹选择 |
 
-在上述完整启动命令后添加 `follower_variant:=apf` 即可切换。两个独立入口组合相同的导航运行逻辑和安全检查，不通过节点继承替换策略。旧参数 `follower_node` 仍兼容两个既有脚本名，显式设置时覆盖 `follower_variant`；新命令优先使用策略名。
+在上述完整启动命令后添加 `follower_variant:=classic`、`follower_variant:=apf` 或 `follower_variant:=v3` 即可选择策略。三个独立入口组合相同的导航运行逻辑和安全检查，不通过节点继承替换策略。旧参数 `follower_node` 仍兼容脚本名，显式设置时优先；改用 `follower_variant` 时删除原命令中的 `follower_node:=...`，避免旧脚本覆盖新选择。
 
-切换前在原 launch 终端按 `Ctrl-C`，等待退出后再启动。两种策略保留相同 ROS 节点名 `/path_follower_node` 和接口，不能同时运行。用 `bash scripts/ros1.sh rostopic info /cmd_vel` 确认只有一个速度发布者。局部独立调试见[局部规划说明](src/fw_mid_local_planner/README.md)。
+首次更新到包含 V3 的代码后，先执行上方构建命令，让 catkin 生成新入口。在项目根目录使用已保存初值启动 V3（默认关闭 CAN）：
+
+```bash
+test -s .ros/initial_pose.txt && \
+bash scripts/with_mid360_network.sh roslaunch fw_mid_bringup navigation.launch \
+  follower_variant:=v3 enable_can:=false start_rviz:=true \
+  initial_pose:="$(cat .ros/initial_pose.txt)"
+```
+
+没有有效保存初值时，改用现场确认的 `initial_pose:="[x,y,z,yaw,pitch,roll]"`；自定义地图、限速等参数照常追加。启用底盘前完成下方 CAN 放行步骤。
+
+V3 使用弧长进度和自适应前视，保留必要的后方绕行段；结合曲率、横向加速度与终点制动限速，按车身净距聚合障碍斥力，并保持绕行侧。短轨迹经过排序和完整碰撞检查后才进入公共发布检查，持续缺少路径进展时尝试重规划。`v3_*` 参数仅由 V3 读取，详见[算法与调参说明](src/fw_mid_local_planner/README.md#v3-算法与参数)。
+
+切换前在原 launch 终端按 `Ctrl-C`，等待退出后再启动。三种策略保留相同 ROS 节点名 `/path_follower_node` 和接口，不能同时运行。用 `bash scripts/ros1.sh rostopic info /cmd_vel` 确认只有一个速度发布者。局部独立调试见[局部规划说明](src/fw_mid_local_planner/README.md)。
 
 ### 放行检查与 CAN
 
@@ -108,7 +122,7 @@ RViz 使用项目配置 `src/fw_mid_localizer/rviz/localizer.rviz`，Fixed Frame
 bash scripts/ros1.sh rostopic pub -1 /move_base_simple/goal geometry_msgs/PoseStamped "{header: {stamp: now, frame_id: map}, pose: {position: {x: 2.0, y: 0.0, z: 0.0}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}}"
 ```
 
-到点后停车等待下一个目标，无需重启；行驶中发送目标会替换当前目标。当前按 XY 距离判定到点，不保证最终朝向，也没有倒车规划。
+到点后停车等待下一个目标，无需重启；行驶中发送目标会替换当前目标。到点要求 XY 距离进入容差，V3 还要求剩余弧长进入容差；均不保证最终朝向，也没有倒车规划。
 
 正常结束前可保存初值，然后在导航 launch 终端按 `Ctrl-C`，等待节点退出并确认车辆停止。紧急情况使用实物急停。手发一次零 `/cmd_vel` 不会取消目标，跟踪器仍可能继续发布命令；短时定位或传感器异常恢复后，已有目标也可能继续执行。
 
@@ -124,7 +138,7 @@ SSH 使用车机管理网口或无线地址，不要使用雷达 IP 或会被迁
 | `enable_can`、`can_interface` | 默认关闭 CAN，接口默认 `can0` |
 | `start_rviz` | 默认 `false` |
 | `max_vx`、`max_wz` | 巡航/纵向上限（m/s）与角速度上限（deg/s） |
-| `follower_variant` | `classic` 或 `apf` |
+| `follower_variant` | `classic`（默认）、`apf` 或 `v3` |
 | `body_to_base_link` | 实车安装外参，必须校准且只保留一个发布者 |
 | `lio_config`、`localizer_config`、`planner_config` | 对应模块 YAML |
 | `geometry_config` | A*、路径处理与车身检查共用的几何配置 |
@@ -152,6 +166,8 @@ bash scripts/ros1.sh /usr/bin/python3 src/livox_ros_driver2/scripts/mid360_netwo
 驱动有单实例保护；启动健康检查要求 45 秒内收到有效点云与 IMU，最低频率分别为 5 Hz 和 50 Hz。驱动或健康检查失败会结束 launch。报单实例冲突时停止原 launch，不要删除锁文件。
 
 ## 安全与排查
+
+已确认但尚未修复的边界问题见 [待处理代码问题](CODE_REVIEW.md)，清理旧代码不代表这些问题已解决。
 
 - 定位、TF、静态地图、障碍记忆、速度合法性与车身制动检查共同约束输出。未知栅格及地图外按占用处理，无路径、到点或无法安全运动时停车。
 - 默认允许短时雷达数据过期后按已有受检命令降速，仍检查静态地图、障碍记忆和制动轨迹；超过允许窗口停车。具体开关和时限见 `dynamic_degraded_*`，这段时间无法感知新出现的障碍。当前紧急包络只对新鲜输入检查，降级期间不保证额外配置的紧急停车距离。
@@ -190,4 +206,10 @@ python3 -m unittest discover -s src/fw_mid_local_planner/tests -v
 python3 -m unittest discover -s src/fw_mid_global_planner/tests -v
 ```
 
-测试使用 ROS 替身，不能替代 Noetic 构建、ROS 联调及受控场地的静态障碍、盲区记忆、传感器中断和停车距离验证。
+离线验证（2026-10-04）：清理后局部规划 73 项、全局规划 1 项测试通过，覆盖三选一入口、弧长进度、速度约束、障碍聚合、候选预算及计算期间取消命令。V3 另在理想运动模型和 ROS 替身下跑通直线纠偏、直角转弯、后方绕行、低速行驶、双侧墙通道和已规划障碍绕行 6 个场景；这些场景不属于上面的单元测试计数。
+
+CAN 裁剪前后，150 组控制帧编码、SocketCAN 封装/解包和反馈解析结果一致；该验证使用 ROS 与插件发现替身，不涉及真实总线通信。源码语法、配置解析、launch 引用及文档链接检查通过。
+
+清理后保留当前 ROS1/MID360 启动链、三种跟踪策略、独立定位与雷达诊断入口，以及地图、标定、保存初值脚本和离线测试。Livox 驱动与 SDK 共用一份 RapidJSON；第三方许可证和必要的底层实现保留。
+
+尚未执行 Noetic 构建、ROS 实机联调或实车性能验证。离线结果不能替代受控场地的静态障碍、盲区记忆、传感器中断和停车距离验证。

@@ -1,4 +1,4 @@
-"""两种跟踪策略共用的 RViz 输出；仅显示诊断，不参与运动放行决策。"""
+"""三种跟踪策略共用的 RViz 输出；仅显示诊断，不参与运动放行决策。"""
 
 import math
 from typing import Optional

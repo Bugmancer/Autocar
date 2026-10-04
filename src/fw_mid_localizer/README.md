@@ -1,162 +1,48 @@
 # fw_mid_localizer
 
-ROS1/Noetic port of the ICP localizer supplied in the ROS2 reference tree.
-It synchronizes `/fastlio2/body_cloud` with `/fastlio2/lio_odom`, aligns the
-body-frame scan against a PCD map, and publishes TF `map -> lidar`. FAST-LIO
-publishes `lidar -> body`, so the two transforms produce the complete map-to-
-vehicle transform without involving the chassis controller.
+使用粗、精两级 ICP 将 `/fastlio2/body_cloud` 与 PCD 地图配准，并结合 `/fastlio2/lio_odom` 发布地图定位。初值须接近真实位姿；当前不提供全局位置或朝向搜索。
 
-The alignment uses coarse-to-fine PCL ICP. Supply an approximate initial pose
-near the real pose; ICP does not perform automatic global position or yaw
-search. `initial_pose` is `[x, y, z, yaw, pitch, roll]`, with position in metres
-and angles in radians, and describes `map -> body`.
-For compatibility, seed rotation uses `Rz(yaw) * Rx(roll) * Ry(pitch)`.
-The printed `rpy_rad` uses standard `Rz(yaw) * Ry(pitch) * Rx(roll)`;
-do not copy those angles back into the seed when roll and pitch are nonzero.
-
-After ICP converges, `/localizer/pose` publishes the current fitted `body` pose
-as `geometry_msgs/PoseStamped` in the `map` frame. Position is in metres and
-orientation is an `x/y/z/w` quaternion. The pose combines the latest FAST-LIO
-odometry with the most recent accepted map alignment and stops publishing when
-the localization validity timeouts expire.
-
-`body` is FAST-LIO's IMU/body reference. It is not necessarily the raw Livox
-sensor origin or the chassis `base_link`; the FAST-LIO extrinsics convert raw
-LiDAR measurements to `body`. The TF frame named `lidar` is FAST-LIO's local
-odometry frame, not the current physical laser origin.
-
-## Standalone Relocalization
-
-Build from the workspace, source its environment, then start the MID-360,
-FAST-LIO and map localizer with the dedicated entry:
+按[主 README](../../README.md)完整构建工作区。以下命令在项目根目录执行，独立启动雷达、LIO、定位器和 RViz，不启动规划器或 CAN：
 
 ```bash
-cd /home/robot/Autocar_v1
-bash scripts/ros1.sh catkin_make --pkg fw_mid_localizer fw_mid_bringup -DCMAKE_BUILD_TYPE=Release -j2
-source devel/setup.bash
 bash scripts/with_mid360_network.sh roslaunch fw_mid_bringup relocalization.launch \
-  initial_pose:="[2.503,-0.023,-0.0395,-0.0175,0.713,0.030]"
+  initial_pose:="[0,0,0,0,0,0]"
 ```
 
-The values above are an example nearby estimate for the bundled map; set them
-to the vehicle's actual starting estimate. This launch starts no planner or
-CAN controller. RViz opens by default with the map (gray), accepted aligned
-scan (green), fitted body pose and coordinate axes. Use `start_rviz:=false`
-for a terminal-only run; `print_pose:=false` disables the pose log.
+将示例初值改为实际位置。完整导航已包含定位器，独立调试前先停止导航；雷达和 LIO 已运行时，添加 `start_lidar:=false start_lio:=false`。可用 `start_rviz:=false`、`print_pose:=false` 关闭显示或位姿日志；`map_pcd`、`lio_config`、`localizer_config` 分别选择 PCD 地图和两个 YAML 配置。
 
-Set `map_pcd:=/absolute/path/to/map.pcd` to load another existing 3D point-cloud
-map. A 2D occupancy-map YAML is not an input to ICP. The default map is
-`fw_mid_localizer/maps/underground/map.pcd`.
+## 坐标与初值
 
-When the MID-360 driver and FAST-LIO are already running, start only localization:
+定位器发布 `map -> lidar`，LIO 发布 `lidar -> body`。其中 `lidar` 是 LIO 世界系，`body` 是 IMU/机体参考，不等同于原始雷达原点或底盘 `base_link`。导航启动入口另提供 `body -> base_link`；独立重定位入口不提供该底盘变换。
+
+`initial_pose` 顺序为 `[x,y,z,yaw,pitch,roll]`，描述 `map -> body`，位置单位米，角度单位弧度。初值采用 `Rz(yaw) * Rx(roll) * Ry(pitch)`；日志 `rpy_rad` 则采用标准 `Rz(yaw) * Ry(pitch) * Rx(roll)`，横滚或俯仰非零时不能直接把日志角度填回初值。位姿保存和下次启动方法见主 README。
+
+默认 PCD 为 `maps/underground/map.pcd`，与 `fw_mid_global_planner/maps/underground/map_2d.yaml` 配套。定位只读取三维 PCD；更换定位地图不会自动更换导航的二维地图，两者必须保持同一坐标系。
+
+## 输出与有效性
+
+| `/localizer/` 下的话题 | 含义 |
+| --- | --- |
+| `pose` | `body` 在 `map` 中的 `PoseStamped`，由最近接受的配准与最新 LIO 位姿合成。 |
+| `icp_pose` | 最近接受的 ICP 位姿，使用参与配准的扫描时间戳。 |
+| `map_cloud` / `aligned_cloud` | 三维地图与已接受的对齐点云，均在 `map` 中。 |
+| `fitness_score` | 精配准最近邻平方距离均值，单位平方米；是几何残差，不是定位正确的概率。 |
+| `localization_valid` | 当前是否已收敛，且输入和最近成功配准均未过期。 |
+
+点云坐标系必须与里程计 `child_frame_id` 一致，时间戳非零且严格递增。节点私有参数 `~max_sync_dt` 默认 `0.05 s`，限制点云与里程计时间差及允许的未来时间偏差；`~input_timeout` 默认 `0.5 s`，同时检查 ROS 采样年龄和墙钟接收年龄；`~alignment_timeout` 默认 `3 s`，限制最近成功配准的墙钟年龄。它们是节点私有 ROS 参数，不是当前 YAML 中的配置项。
+
+定位失效后停止更新定位 TF 和 `pose`；RViz 或下游缓存可能仍显示旧结果，必须同时检查 `localization_valid`。回放使用 ROS 模拟时间，时钟回退后重启 LIO 和定位器。
+
+## 重定位服务
+
+节点不订阅 RViz `/initialpose`。保持车辆停稳，通过服务提交 PCD 和 `map -> body` 初值；以下零位姿仅为示例：
 
 ```bash
-roslaunch fw_mid_bringup relocalization.launch \
-  start_lidar:=false start_lio:=false \
-  initial_pose:="[2.503,-0.023,-0.0395,-0.0175,0.713,0.030]"
+bash scripts/ros1.sh rosservice call /localizer/relocalize \
+  "{pcd_path: '$(pwd)/src/fw_mid_localizer/maps/underground/map.pcd', x: 0.0, y: 0.0, z: 0.0, yaw: 0.0, pitch: 0.0, roll: 0.0}"
+bash scripts/ros1.sh rosservice call /localizer/relocalize_check "{code: 0}"
 ```
 
-Only one localizer should run at a time. Stop the navigation launch before
-starting this standalone entry, since navigation already contains a localizer.
-`lio_config` and `localizer_config` accept alternate YAML configuration paths.
+`success: true` 只表示已接受地图和初值，随后等待 ICP；拒绝时返回 `success: false` 和原因。只有状态服务 `valid: true` 才表示本次请求已收敛且仍有效，`code` 不改变检查逻辑。请求被接受后到定位恢复前，不发布有效定位；更换 PCD 时还需单独配置配套的导航二维地图。
 
-The output topics are:
-
-| Topic | Type | Meaning |
-| --- | --- | --- |
-| `/localizer/pose` | `geometry_msgs/PoseStamped` | Current fitted `body` pose in `map`, including odometry between accepted matches. |
-| `/localizer/icp_pose` | `geometry_msgs/PoseStamped` | Direct accepted ICP result at the fitted scan timestamp. |
-| `/localizer/map_cloud` | `sensor_msgs/PointCloud2` | Loaded 3D map in `map`. |
-| `/localizer/aligned_cloud` | `sensor_msgs/PointCloud2` | Accepted scan transformed into `map`, stamped at the fitted scan time. |
-| `/localizer/fitness_score` | `std_msgs/Float64` | Refined ICP mean squared nearest-neighbor distance in square metres; lower is better. Published for accepted matches. |
-| `/localizer/localization_valid` | `std_msgs/Bool` | Whether the latest accepted match and input data are still valid. |
-
-Inspect both the pose and validity, since the last RViz display or previously
-received pose may remain visible after localization becomes invalid:
-
-```bash
-rostopic echo /localizer/pose
-rostopic echo /localizer/localization_valid
-rostopic echo /localizer/fitness_score
-```
-
-Each accepted fit also logs `xyz_m`, conventional `rpy_rad` in roll/pitch/yaw
-order, `q_xyzw`, and `fitness_m2` when `print_pose` is enabled. Fitness is a
-geometric residual, not a probability or proof of globally correct alignment.
-
-Input clouds must share the odometry child frame and have strictly increasing,
-nonzero timestamps. Cloud and odometry timestamps must differ by at most
-`~max_sync_dt` (default 0.05 s). Input timestamps and wall-clock receipt age
-must remain within `~input_timeout` (default 0.5 s); the last accepted alignment
-must remain within `~alignment_timeout` (default 3 s). Stale inputs are not
-re-fitted. For bag playback use ROS simulated time, and restart the localizer
-and LIO after resetting the clock.
-
-## Localizer-Only Entry
-
-Build and launch:
-
-```bash
-catkin_make --pkg fw_mid_localizer
-source devel/setup.bash
-roslaunch fw_mid_localizer localizer.launch
-```
-
-Start the workspace's FAST-LIO node from the same launch when desired:
-
-```bash
-roslaunch fw_mid_localizer localizer.launch start_lio:=true rviz:=true
-```
-
-For a vehicle startup, the launch file defaults to the bundled laboratory map
-and an approximate zero pose. Override the map and initial estimate when
-needed. The localizer loads the PCD before it accepts synchronized LIO samples
-and does not publish a valid TF until ICP converges:
-
-```bash
-roslaunch fw_mid_localizer localizer.launch \
-  map_pcd:=$(rospack find fw_mid_localizer)/maps/underground/map.pcd \
-  initial_pose:="[0.0,0.0,0.0,0.0,0.0,0.0]"
-```
-
-The project laboratory PCD is bundled at
-`maps/underground/map.pcd`. Its matching 2D map is
-`fw_mid_global_planner/maps/underground/map_2d.yaml`; both use the same map
-coordinate frame. The default navigation launch selects this pair and an
-approximate `[0,0,0,0,0,0]` seed. Refine `initial_pose` or use the relocalization
-service before enabling motion. The node does not subscribe to RViz's
-`/initialpose` topic; use the service to replace the estimate at runtime.
-
-Submit a map and initial map-to-body estimate (angles are radians):
-
-```bash
-rosservice call /localizer/relocalize \
-  "{pcd_path: '$(rospack find fw_mid_localizer)/maps/underground/map.pcd', x: 0.0, y: 0.0, z: 0.0, yaw: 0.0, pitch: 0.0, roll: 0.0}"
-```
-
-`success: true` means the request was accepted, not that ICP has converged.
-Poll the separate status service:
-
-```bash
-rosservice call /localizer/relocalize_check "{code: 0}"
-```
-
-Only `valid: true` means the latest request converged. Until then the node
-does not publish `map -> lidar`; a rejected request returns `success: false`
-with its reason. The `code` field is retained for source-interface
-compatibility and does not bypass the convergence result.
-
-Read the fitted current position and orientation:
-
-```bash
-rostopic echo /localizer/pose
-```
-
-When a chassis transform publisher supplies `body -> base_link` (as in the
-navigation launch), read the chassis reference pose through TF instead of
-applying the LiDAR/body offset again. The standalone relocalization launch
-does not publish this chassis transform:
-
-```bash
-rosrun tf tf_echo map base_link
-```
+节点订阅、同步、时效和服务逻辑在 `src/localizer_node.cpp`；粗精配准及 fitness 门限在 `src/localizers/icp_localizer.cpp` 和 `config/localizer.yaml`。

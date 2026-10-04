@@ -13,7 +13,7 @@ from sensor_msgs.msg import PointCloud2
 from visualization_msgs.msg import Marker, MarkerArray
 
 from .obstacle_memory import ObstacleMemory
-from .obstacle_processing import largest_cluster_indices, supported_obstacle_points, trajectory_cost
+from .obstacle_processing import largest_cluster_indices, supported_obstacle_points
 
 
 class DynamicObstacleLayer:
@@ -54,8 +54,6 @@ class DynamicObstacleLayer:
         self.cluster_distance = float(rospy.get_param("~dynamic_cluster_distance", 0.35))
         self.support_radius = float(rospy.get_param("~dynamic_obstacle_support_radius", 0.15))
         self.support_min_points = int(rospy.get_param("~dynamic_obstacle_support_min_points", 3))
-        self.collision_radius = float(rospy.get_param("~dynamic_collision_radius", 0.42))
-        self.influence_distance = float(rospy.get_param("~dynamic_influence_distance", 0.85))
         self.use_emergency_stop = bool(rospy.get_param("~dynamic_emergency_stop", True))
         self.emergency_stop_mode = str(rospy.get_param("~emergency_stop_mode", "rectangle"))
         self.center_stop_radius = float(rospy.get_param("~dynamic_center_stop_radius", 0.40))
@@ -377,7 +375,3 @@ class DynamicObstacleLayer:
 
     def largest_cluster_indices(self, points):
         return largest_cluster_indices(points, self.cluster_distance)
-
-    def trajectory_cost(self, trajectory):
-        _, points = self.point_snapshot()
-        return trajectory_cost(trajectory, points, self.collision_radius, self.influence_distance)

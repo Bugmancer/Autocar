@@ -1,29 +1,17 @@
 # coding: utf-8
 
 """
-Interfaces contain low level implementations that interact with CAN hardware.
+本项目维护 python-can 的 SocketCAN 子集，供 Linux 车机底盘通信使用。
+保留第三方插件入口发现机制；未随项目提供的硬件后端不在内建表中注册。
 """
 
 import warnings
 from pkg_resources import iter_entry_points
 
 
-# interface_name => (module, classname)
+# 接口名称映射到模块和总线类，供 can.interface 按需导入。
 BACKENDS = {
-    'kvaser':           ('can.interfaces.kvaser',           'KvaserBus'),
     'socketcan':        ('can.interfaces.socketcan',        'SocketcanBus'),
-    'serial':           ('can.interfaces.serial.serial_can','SerialBus'),
-    'pcan':             ('can.interfaces.pcan',             'PcanBus'),
-    'usb2can':          ('can.interfaces.usb2can',          'Usb2canBus'),
-    'ixxat':            ('can.interfaces.ixxat',            'IXXATBus'),
-    'nican':            ('can.interfaces.nican',            'NicanBus'),
-    'iscan':            ('can.interfaces.iscan',            'IscanBus'),
-    'virtual':          ('can.interfaces.virtual',          'VirtualBus'),
-    'neovi':            ('can.interfaces.ics_neovi',        'NeoViBus'),
-    'vector':           ('can.interfaces.vector',           'VectorBus'),
-    'slcan':            ('can.interfaces.slcan',            'slcanBus'),
-    'canalystii':       ('can.interfaces.canalystii',       'CANalystIIBus'),
-    'systec':           ('can.interfaces.systec',           'UcanBus')
 }
 
 BACKENDS.update({

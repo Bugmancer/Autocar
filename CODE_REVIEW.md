@@ -1,12 +1,10 @@
-# 代码审查记录（2026-10-04）
+# 待处理代码问题（2026-10-04）
 
-截至第三轮，第二轮记录的 6 项问题仍未修复，第三轮新增确认 3 项，详见文末。第三轮只更新本报告，未修改运行代码。
+本文件保留仍有处理价值的问题、复现证据和验证限制。V3 已通过弧长进度规避第 8 项，classic/APF 仍受影响；其余问题尚未修复。本次项目清理没有修改这些边界行为。
 
 审查覆盖项目自有的导航运行层、控制器、全局规划、障碍记忆、车身碰撞、LIO/ICP 集成、底盘适配及启动脚本。第三方 CAN 库、Livox SDK 和 ikd-Tree 未逐行重审，仅检查项目调用边界。
 
-第二轮只修改中文注释、文档字符串和说明，保留第一轮重构及所有运行行为。以下问题尚未修复，按实际影响排序；没有将最终碰撞检查仍能拦截的问题描述为必然碰撞。
-
-## 第二轮确认的问题
+## 已确认问题
 
 ### 1. P2：点云降级期间，额外配置的紧急包络可能失效
 
@@ -50,61 +48,47 @@
 
 ### 6. P2：A* 角点坐标浮点回算会落入相邻栅格
 
-位置：[astar_planner_node.py](src/fw_mid_global_planner/scripts/astar_planner_node.py)，`grid_to_world` 和 `world_to_grid`。这是上轮已记录的遗留问题。
+位置：[astar_planner_node.py](src/fw_mid_global_planner/scripts/astar_planner_node.py)，`grid_to_world` 和 `world_to_grid`。
 
 当前地图 `origin=[-26.3,-13.3,0]`、`resolution=0.05` 下，栅格 `(54,54)` 输出 `(-23.6,-10.600000000000001)`，再取 `floor` 得到 `(53,53)`。局部规划器二次检查时可能把贴近膨胀边界的合法路径判为占用。
 
 建议区分路径使用的栅格中心坐标与区域边界坐标；不要直接修改所有 `grid_to_world` 调用，因为禁行区边界也依赖该函数。
 
-## 需要实机确认
-
-- [localizer_node.cpp](src/fw_mid_localizer/src/localizer_node.cpp) 的 ICP、输入和状态心跳共用单线程 `ros::spin()`。一次配准若超过默认 `pose_timeout=0.5 s`，会延迟心跳并触发安全停车。需测量实际地图、点数和车机上的配准时延；不能直接认定当前设备一定超过门限。
-- [check_mid360_topics.py](src/livox_ros_driver2/scripts/check_mid360_topics.py) 的话题健康检查验证时间戳递增和接收频率，没有验证采样年龄。旧时间戳持续递增也可通过频率检查；下游定位仍另行检查采样年龄。建议启动健康检查也明确“有效数据”的时效要求。
-
-## 中文注释与验证
-
-中文注释覆盖核心坐标系/单位、状态代次、锁边界、规划确认、死区与速度状态、记忆清除证据、碰撞预算和制动模型、点云同步/去畸变、滤波约定、定位回调及网络脚本副作用。纠正了与实际实现不符的危险区停车、末次路径复核及过期紧急包络说明；版权、工具指令和第三方原始说明保留。
-
-修改前后对比 Python AST（剥离文档字符串）、C++ 非注释词元、YAML 解析值和 launch/service 定义，确认第二轮未更改运行逻辑或参数。
-
-离线回归测试共 34 项通过。Python 语法、launch XML、相关 Bash 语法及空白差异检查通过。未执行 Noetic/C++ 构建、ROS 联调或实车测试；现有测试通过不代表上述未覆盖边界已修复。
-
-## 第三轮新增问题
-
 ### 7. P2：乱序点云可清空障碍记忆，并让最终检查重新放行
 
-位置：[dynamic_obstacle_layer.py](src/fw_mid_local_planner/fw_mid_local_planner/dynamic_obstacle_layer.py)，第 158-162 行，`cloud_cb` 的小幅时间回退分支。
+位置：[dynamic_obstacle_layer.py](src/fw_mid_local_planner/fw_mid_local_planner/dynamic_obstacle_layer.py)，`cloud_cb` 的小幅时间回退分支。
 
-时间戳回退不超过 `0.5 s` 时，代码在检查点云内容前直接清空记忆，但未使 `last_update_time`、`last_received`、`projection_valid` 失效，也未更新清除代次。若该帧为空，第 171-172 行直接返回；下一次投影得到空障碍集，数据新鲜度却仍可通过。
+时间戳回退不超过 `0.5 s` 时，代码在检查点云内容前直接清空记忆，但未使 `last_update_time`、`last_received`、`projection_valid` 失效，也未更新清除代次。若该帧为空则直接返回；下一次投影得到空障碍集，数据新鲜度却仍可通过。
 
 复现保留默认 `timeout=0.5 s`、`point_step=2`，模拟当前 ROS 时间 `10.0 s`。先接收同时间戳的三个支持点 `(0.44,0,0.4)`、`(0.46,0.01,0.4)`、`(0.48,-0.01,0.4)`，每点重复两次以保留默认抽样。真实记忆产生两个占用体素，真实 `publish_cmd(0.2,0,0)` 返回拒绝并发布零速。再接收时间戳 `9.9 s` 的空云并更新投影，记忆变为 `[]`、`is_fresh()` 仍为真，同一命令被放行并发布 `0.2 m/s`。此过程没有自由射线证据或显式清除请求。
 
 触发需要允许时间窗内的乱序或时间回退帧；正常严格递增输入不触发。建议丢弃乱序帧并保留障碍；真正的时钟重置应使输入失效，并通过完整的新会话流程恢复，不能静默清空后沿用旧的新鲜状态。
 
-### 8. P2：按车头方向裁剪路径会丢掉必要的后方绕行段
+### 8. P2：classic/APF 按车头方向裁剪路径会丢掉必要的后方绕行段
 
-位置：[follower_runtime.py](src/fw_mid_local_planner/fw_mid_local_planner/follower_runtime.py)，第 852-853 行，`_control_loop` 的路径裁剪条件。
+位置：[follower_runtime.py](src/fw_mid_local_planner/fw_mid_local_planner/follower_runtime.py)，`_control_loop` 中 `uses_path_progress` 为假时的路径裁剪条件。
 
 `forward_projection < 0` 只说明路径点在当前车头后方，不能说明已经走过。机器人和目标均朝东、但机器人位于仅西侧开放的 U 形障碍内时，合法路线需要先转向西侧出口；当前循环会删除这段尚未执行的路线。
 
 复现机器人位姿 `(0,0,0)`、目标 `(2,0)`，路径经西侧 `(-1.5,0)`、`(-1.5,-2)` 和南侧 `(2,-2)` 绕出。障碍查询使用东侧墙 `abs(x-0.9)<=0.6 且 -1.6<=y<=1.6`，以及南北墙 `abs(abs(y)-1)<=0.6 且 -1.2<=x<=1.5`。生产 `process_planned_path` 完成默认捷径、平滑和重采样后生成 86 点，用生产 `path_collision_free` 检查通过。生产 `_control_loop` 一个周期后只剩 39 点，首点约为 `(0.0940,-1.9998)`，当前位置连接到剩余路径的检查失败。
 
-这会丢失可行路线，导致错误接近侧墙或反复停车、重规划；最终车身碰撞检查仍可拦截危险命令。建议以路径投影和沿路径进度判断已完成路段，并保留尚未经过的转向与绕行点。该问题位于公共运行层，两种策略均受影响。
+这会丢失可行路线，导致错误接近侧墙或反复停车、重规划；最终车身碰撞检查仍可拦截危险命令。V3 已使用路径投影和弧长进度并绕过该裁剪；classic/APF 仍沿用原逻辑。
 
 ### 9. P2：定时发布可能让局部代价图退回旧障碍状态
 
-位置：[astar_planner_node.py](src/fw_mid_global_planner/scripts/astar_planner_node.py)，第 576 行，`publish_visuals`；接收位置为 [follower_runtime.py](src/fw_mid_local_planner/fw_mid_local_planner/follower_runtime.py) 第 504-506 行。
+位置：[astar_planner_node.py](src/fw_mid_global_planner/scripts/astar_planner_node.py)，`publish_visuals`；接收位置为 [follower_runtime.py](src/fw_mid_local_planner/fw_mid_local_planner/follower_runtime.py) 的 `costmap_cb`。
 
-定时线程取得旧 `current_costmap` 引用后，动态障碍回调可以更新共享地图、发布新地图并确认快照；定时线程随后仍会构造并发布旧地图。局部 `costmap_cb` 全量接收，因而可回退到旧状态。这与第一轮修复的规划服务旧快照回写是两个不同的并发问题。
+定时线程取得旧 `current_costmap` 引用后，动态障碍回调可以更新共享地图、发布新地图并确认快照；定时线程随后仍会构造并发布旧地图。局部 `costmap_cb` 全量接收，因而可回退到旧状态。
 
 使用真实 `publish_visuals`、`dynamic_points_cb` 和消息构造方法，以线程事件固定顺序：新地图在 `11.0 s` 将单元设为 `100` 并发送 ACK，定时线程在 `12.0 s` 发布旧地图的 `0`。实际发布结果为 `[(stamp=11.0, cell=100), (stamp=12.0, cell=0)]`，服务器当前单元仍为 `100`，ACK 仍为 `11.0`。旧内容甚至带有更新的消息时间戳，因此仅比较 `header.stamp` 不能解决。
 
 影响是局部代价图及可视化暂时回退，依赖该图的查询会读到旧占用。本地动态记忆和最终车身检查仍独立存在；ACK 对“服务端已应用快照”的含义仍成立，不能据此说后续 A* 必然使用旧图。建议串行保护地图内容与发布顺序，或携带明确的内容版本并在接收端拒绝旧版本；仅在取得数组引用时加锁不够。
 
-### 第三轮验证及限制
+## 验证与待确认项
 
-三项新增问题均通过现有 ROS 替身直接调用生产方法完成离线复现，并独立复跑。点云复现替代消息读取、TF 和时钟；绕行复现隔离传感器及命令发布；地图竞态复现替代障碍膨胀结果并固定线程顺序。未用这些替身结果声称完成 ROS 或实车验证。
+第 7 至 9 项已用 ROS 替身调用生产方法离线复现并独立复跑：分别替代消息读取/TF/时钟、隔离传感器及命令发布、替代障碍膨胀并固定线程顺序。当前自动化验证范围与运行命令见 [README](README.md#模块与验证)，测试通过不代表上述边界已修复。未执行 Noetic/C++ 构建、ROS 联调、SocketCAN 或实车验证。
 
-重新执行局部规划 33 项、全局规划 1 项测试，全部通过；`git -c core.autocrlf=false diff --check` 通过。现有测试尚未覆盖新增三项边界，本轮未新增测试或修改运行行为。未执行 Noetic/C++ 构建、ROS 联调、SocketCAN 或实车验证。
+- [localizer_node.cpp](src/fw_mid_localizer/src/localizer_node.cpp) 的 ICP、输入和状态心跳共用单线程 `ros::spin()`。一次配准若超过默认 `pose_timeout=0.5 s`，会延迟心跳并触发安全停车。需测量实际地图、点数和车机上的配准时延。
+- [check_mid360_topics.py](src/livox_ros_driver2/scripts/check_mid360_topics.py) 的话题健康检查验证时间戳递增和接收频率，没有验证采样年龄。旧时间戳持续递增也可通过频率检查；下游定位仍另行检查采样年龄。
 
-另有一个尚未确认的 TF 一致性风险：障碍投影分别查询 `map <- memory`、`base <- memory` 的 `Time(0)`，车体位姿另查 `map <- base`；定位校正在当前时间发布，里程计使用扫描时刻，几次查询可能采用不同的共同时间。需在真实 tf2 中注入错开的变换时间及定位校正变化，验证同一障碍与车体是否一致。该项未计入上述三项已确认问题。
+- 障碍投影分别查询 `map <- memory`、`base <- memory` 的 `Time(0)`，车体位姿另查 `map <- base`；定位校正在当前时间发布，里程计使用扫描时刻，几次查询可能采用不同的共同时间。需在真实 tf2 中注入错开的变换时间及定位校正变化，验证同一障碍与车体是否一致；该风险尚未确认。

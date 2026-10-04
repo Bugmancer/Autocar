@@ -15,7 +15,6 @@ class ClassicTracking:
         if self.name not in controllers:
             rospy.logwarn("Unknown tracking_controller=%s; using pid", self.name)
             self.name = "pid"
-        follower.tracking_controller = self.name
         self.controller = controllers[self.name](rospy, cruise_speed=follower.command_max_vx)
 
     def compute(self, pose, path, target, dt):

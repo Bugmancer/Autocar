@@ -1,6 +1,8 @@
 """不启动 ROS 和硬件，验证两个 launch 的策略选择、兼容参数及无效选项拒绝。"""
 
+import ast
 from pathlib import Path
+import re
 import unittest
 import xml.etree.ElementTree as ET
 
@@ -8,6 +10,12 @@ import xml.etree.ElementTree as ET
 SRC = Path(__file__).resolve().parents[2]
 LOCAL = SRC / "fw_mid_local_planner/launch/local_planner.launch"
 BRINGUP = SRC / "fw_mid_bringup/launch/navigation.launch"
+PACKAGE = SRC / "fw_mid_local_planner"
+STRATEGIES = {
+    "classic": ("path_follower_node.py", "ClassicTracking"),
+    "apf": ("path_follower_node_v1.py", "APFTracking"),
+    "v3": ("path_follower_node_v3.py", "AdaptiveTracking"),
+}
 
 
 def resolve(value, arguments):
@@ -47,16 +55,40 @@ class LaunchSelectionTests(unittest.TestCase):
         for launch in (LOCAL, BRINGUP):
             with self.subTest(launch=launch):
                 self.assertEqual(self.selected_node(launch), "path_follower_node.py")
-                self.assertEqual(self.selected_node(launch, follower_variant="classic"),
-                                 "path_follower_node.py")
-                self.assertEqual(self.selected_node(launch, follower_variant="apf"),
-                                 "path_follower_node_v1.py")
+            for variant, (script, _) in STRATEGIES.items():
+                with self.subTest(launch=launch, variant=variant):
+                    self.assertEqual(self.selected_node(launch, follower_variant=variant),
+                                     script)
 
     def test_existing_script_override_remains_supported(self):
         for launch in (LOCAL, BRINGUP):
-            for script in ("path_follower_node.py", "path_follower_node_v1.py"):
+            for script, _ in STRATEGIES.values():
                 with self.subTest(launch=launch, script=script):
-                    self.assertEqual(self.selected_node(launch, follower_node=script), script)
+                    self.assertEqual(self.selected_node(
+                        launch, follower_variant="v3", follower_node=script), script)
+
+    def test_selected_scripts_are_installed_and_select_strategies_by_composition(self):
+        cmake = (PACKAGE / "CMakeLists.txt").read_text(encoding="utf-8")
+        installed = re.search(r"catkin_install_python\(PROGRAMS(.*?)DESTINATION", cmake,
+                              flags=re.DOTALL).group(1).split()
+        for script, strategy in STRATEGIES.values():
+            with self.subTest(script=script):
+                self.assertIn("scripts/" + script, installed)
+                wrapper = ast.parse((PACKAGE / "scripts" / script).read_text(encoding="utf-8"))
+                self.assertTrue(any(
+                    isinstance(node, ast.ImportFrom)
+                    and node.module == "fw_mid_local_planner." + Path(script).stem
+                    and any(alias.name == "main" for alias in node.names)
+                    for node in ast.walk(wrapper)))
+                entry = ast.parse((PACKAGE / "fw_mid_local_planner" / script)
+                                  .read_text(encoding="utf-8"))
+                self.assertFalse(any(isinstance(node, ast.ClassDef) for node in ast.walk(entry)))
+                runtime_calls = [node for node in ast.walk(entry)
+                                 if isinstance(node, ast.Call)
+                                 and isinstance(node.func, ast.Name)
+                                 and node.func.id == "FollowerRuntime"]
+                self.assertEqual(len(runtime_calls), 1)
+                self.assertEqual(runtime_calls[0].args[0].id, strategy)
 
     def test_unknown_strategy_or_executable_fails_closed(self):
         for launch in (LOCAL, BRINGUP):

@@ -31,10 +31,11 @@ catkin_package(
     visualization_msgs
 )
 
-# 两个脚本分别提供经典/APF 可执行入口；launch 只选择其中一个。
+# 三个脚本分别提供经典/APF/V3 可执行入口；launch 只选择其中一个。
 catkin_install_python(PROGRAMS
   scripts/path_follower_node.py
   scripts/path_follower_node_v1.py
+  scripts/path_follower_node_v3.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

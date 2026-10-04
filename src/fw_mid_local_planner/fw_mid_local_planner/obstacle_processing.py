@@ -2,11 +2,10 @@
 
 import math
 from itertools import product
-from typing import Iterable, List, Sequence, Tuple
+from typing import List, Sequence, Tuple
 
 
 Point2D = Tuple[float, float]
-TimedPoint2D = Tuple[float, float, float]
 
 
 def supported_obstacle_points(points, radius, min_points):
@@ -104,46 +103,3 @@ def select_front_obstacles(
             local_result.append(local_point)
             map_result.append(map_point)
     return local_result, map_result
-
-
-def deduplicate_timed_points(
-    history: Iterable[TimedPoint2D], resolution: float, limit: int
-) -> List[Point2D]:
-    """对按时间排序的 ``(stamp, x, y)`` 历史按网格去重，优先保留较新点。"""
-    resolution = max(0.02, float(resolution))
-    limit = max(1, int(limit))
-    seen = set()
-    newest_first = []
-    for _, x, y in reversed(list(history)):
-        key = (int(round(x / resolution)), int(round(y / resolution)))
-        if key in seen:
-            continue
-        seen.add(key)
-        newest_first.append((float(x), float(y)))
-        if len(newest_first) >= limit:
-            break
-    newest_first.reverse()
-    return newest_first
-
-
-def trajectory_cost(
-    trajectory: Sequence[Tuple[float, float, float]],
-    obstacles: Sequence[Point2D],
-    collision_radius: float,
-    influence_distance: float,
-) -> float:
-    """按轨迹到最近障碍的距离给代价，进入碰撞半径时返回无穷大。"""
-    if not trajectory or not obstacles:
-        return 0.0
-    minimum = min(
-        math.hypot(x - ox, y - oy)
-        for x, y, _ in trajectory
-        for ox, oy in obstacles
-    )
-    if minimum <= collision_radius:
-        return float("inf")
-    if minimum >= influence_distance:
-        return 0.0
-    return (influence_distance - minimum) / max(
-        1e-3, influence_distance - collision_radius
-    )

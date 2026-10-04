@@ -22,10 +22,6 @@ def distance(a: Point2D, b: Point2D) -> float:
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
-def path_length(points: Sequence[Point2D]) -> float:
-    return sum(distance(points[index - 1], points[index]) for index in range(1, len(points)))
-
-
 def poses_to_xy(path_msg) -> List[Point2D]:
     return [
         (float(pose.pose.position.x), float(pose.pose.position.y))

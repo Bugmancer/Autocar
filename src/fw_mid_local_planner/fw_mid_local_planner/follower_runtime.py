@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""两种跟踪策略共用的 ROS1 导航运行层，负责目标、重规划和运动安全检查。
+"""三种跟踪策略共用的 ROS1 导航运行层，负责目标、重规划和运动安全检查。
 
 本层只输出 ``/cmd_vel``；速度单位转换、底盘协议和通信看门狗由底盘包负责。
 新增跟踪策略应通过组合接入，不能绕过本层的最终命令检查。
@@ -49,7 +49,6 @@ class FollowerRuntime:
         self.localization_valid = False
         self.localization_received = None
         self.overlay_applied_stamp = rospy.Time()
-        self.overlay_sent_stamp = rospy.Time()
         self._last_overlay_wall = 0.0
         self.start_recovery = None
         self.recovery_suffix = []
@@ -665,7 +664,6 @@ class FollowerRuntime:
                 pose.position.y = y
                 pose.orientation.w = 1.0
                 message.poses.append(pose)
-            self.overlay_sent_stamp = message.header.stamp
             self._last_overlay_wall = time.monotonic()
             self.dynamic_points_pub.publish(message)
             return message.header.stamp
@@ -841,25 +839,37 @@ class FollowerRuntime:
 
         rx, ry, yaw = robot_pose
         with self._lock:
-            # 保留最后一个目标点，舍去已接近或位于当前车身朝向后方的路径点。
-            cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
-            while len(self.global_path) > 1:
-                first = self.global_path[0]
-                dx = first.x - rx
-                dy = first.y - ry
-                distance = math.hypot(dx, dy)
-                forward_projection = dx * cos_yaw + dy * sin_yaw
-                if forward_projection < 0 or distance < self.waypoint_tolerance:
-                    self.global_path.pop(0)
-                else:
-                    break
+            if getattr(self.tracking, "manages_path_progress", False):
+                # V3 按弧长跟踪完整路径；车头后方可能仍是尚未走过的必要绕行段。
+                if self.global_path:
+                    try:
+                        self.tracking.update_path_progress(robot_pose, self.global_path)
+                    except (ValueError, OverflowError) as error:
+                        # 非法规划点不能杀死 ROS 控制定时线程并留下上一条运动命令。
+                        self.publish_stop()
+                        rospy.logwarn_throttle(1.0, "Invalid V3 path: %s" % error)
+                        return
+            else:
+                # 经典/APF 保留既有裁剪规则，V3 的进度算法不改变旧策略的执行结果。
+                cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
+                while len(self.global_path) > 1:
+                    first = self.global_path[0]
+                    dx = first.x - rx
+                    dy = first.y - ry
+                    distance = math.hypot(dx, dy)
+                    forward_projection = dx * cos_yaw + dy * sin_yaw
+                    if forward_projection < 0 or distance < self.waypoint_tolerance:
+                        self.global_path.pop(0)
+                    else:
+                        break
             path = list(self.global_path)
             generation = self._plan_generation
         if not path:
             self.publish_stop()
             return
         final = path[-1]
-        if math.hypot(final.x - rx, final.y - ry) < self.goal_tolerance:
+        if (math.hypot(final.x - rx, final.y - ry) < self.goal_tolerance
+                and getattr(self.tracking, "remaining_distance", 0.0) <= self.goal_tolerance):
             with self._lock:
                 if generation != self._plan_generation:
                     return
@@ -887,6 +897,11 @@ class FollowerRuntime:
             self.publish_path_points(path)
             velocity_x, _, velocity_yaw = self.tracking.compute(
                 robot_pose, path, target, self.control_dt)
+        # V3 的短轨迹足迹查询较重，必须在锁外执行；最终发布仍复核代次与定位。
+        refine = getattr(self.tracking, "refine_command", None)
+        if refine is not None:
+            velocity_x, _, velocity_yaw = refine(
+                robot_pose, (velocity_x, 0.0, velocity_yaw), generation)
         if self.publish_cmd(velocity_x, 0.0, velocity_yaw, robot_pose, generation):
             self.publish_desired_direction(robot_pose, target, velocity_x, active=True)
 

@@ -8,7 +8,7 @@ from .follower_runtime import FollowerRuntime
 
 
 def main() -> None:
-    # 两个入口互斥使用同一节点名，保持已有私有服务和 RViz 话题地址稳定。
+    # 三个入口互斥使用同一节点名，保持已有私有服务和 RViz 话题地址稳定。
     rospy.init_node("path_follower_node")
     FollowerRuntime(APFTracking)
     rospy.spin()

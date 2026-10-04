@@ -58,7 +58,6 @@ endif()
 
 add_executable(fw_mid_localizer_node
   src/localizer_node.cpp
-  src/localizers/commons.cpp
   src/localizers/icp_localizer.cpp
 )
 add_dependencies(fw_mid_localizer_node
