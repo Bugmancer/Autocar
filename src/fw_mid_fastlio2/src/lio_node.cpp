@@ -42,6 +42,7 @@ struct NodeConfig
 
 struct StateData
 {
+    // 当前扫描等待尾部 IMU 时仍占据队首；限长裁剪不能删除这份待同步扫描。
     bool lidar_pushed = false;
     std::mutex imu_mutex;
     std::mutex lidar_mutex;
@@ -148,7 +149,7 @@ private:
         {
             ROS_WARN("~config_path is empty; using built-in FAST-LIO defaults");
         }
-        // A launch/private parameter takes precedence over the YAML value.
+        // launch 传入的私有参数优先于 YAML，便于切换驱动的加速度单位。
         double parameter_scale = 0.0;
         if (pnh_.getParam("imu_acc_scale", parameter_scale))
             node_config_.imu_acc_scale = parameter_scale;
@@ -194,6 +195,7 @@ private:
 
     void imuCB(const sensor_msgs::ImuConstPtr &msg)
     {
+        // 输入先校验再入队；滤波器要求时间严格递增，时钟重置后需重启节点。
         const double timestamp = Utils::getSec(msg->header);
         if (!std::isfinite(timestamp) || timestamp <= 0.0)
         {
@@ -208,6 +210,7 @@ private:
             ROS_WARN_THROTTLE(2.0, "Dropping IMU message containing non-finite values");
             return;
         }
+        // Livox 原驱动用 g 表示加速度；进入滤波器前统一为米/秒平方。
         const V3D acceleration = raw_acceleration * node_config_.imu_acc_scale;
         const double acceleration_norm = acceleration.norm();
         if (acceleration_norm < 1.0 || acceleration_norm > 30.0)
@@ -230,6 +233,7 @@ private:
 
     void lidarCB(const livox_ros_driver2::CustomMsgConstPtr &msg)
     {
+        // 过滤无效回波与量程外点，但保留逐点时间偏移，供后续运动去畸变。
         if (msg->point_num != msg->points.size())
             ROS_WARN_THROTTLE(5.0, "Livox point_num (%u) differs from points array size (%zu); using the smaller value",
                               msg->point_num, msg->points.size());
@@ -267,6 +271,7 @@ private:
 
     bool syncPackage()
     {
+        // 固定按 IMU、雷达顺序加锁；一次只取一帧，等 IMU 覆盖扫描结束时刻。
         std::lock_guard<std::mutex> imu_lock(state_data_.imu_mutex);
         std::lock_guard<std::mutex> lidar_lock(state_data_.lidar_mutex);
         if (state_data_.imu_buffer.empty() || state_data_.lidar_buffer.empty()) return false;
@@ -283,6 +288,7 @@ private:
                 std::sort(m_package_.cloud->points.begin(), m_package_.cloud->points.end(),
                           [](const PointType &a, const PointType &b) { return a.curvature < b.curvature; });
                 m_package_.cloud_start_time = state_data_.lidar_buffer.front().first;
+                // curvature 借用为相对扫描起点的毫秒数，排序后的末点确定帧时长。
                 const double scan_duration = m_package_.cloud->points.back().curvature / 1000.0;
                 if (!std::isfinite(scan_duration) || scan_duration < 0.0 ||
                     scan_duration > node_config_.max_scan_duration)
@@ -302,6 +308,7 @@ private:
                 continue;
             }
             if (state_data_.last_imu_time < m_package_.cloud_end_time) return false;
+            // 此包消费扫描结束前的 IMU，处理器另外保留上一包末样本连接积分区间。
             m_package_.imus.clear();
             while (!state_data_.imu_buffer.empty() &&
                    state_data_.imu_buffer.front().time <= m_package_.cloud_end_time)
@@ -391,6 +398,7 @@ private:
 
     void timerCB(const ros::TimerEvent &)
     {
+        // 先完成初始化或状态估计，只有进入建图态且位姿有限时才向下游发布。
         if (!syncPackage()) return;
         const auto start = std::chrono::steady_clock::now();
         builder_->process(m_package_);
@@ -437,6 +445,7 @@ int main(int argc, char **argv)
     try
     {
         LIONode node;
+        // 建图器和滤波器由单线程串行调用；改成多线程需额外保护处理及发布状态。
         ros::spin();
         return 0;
     }

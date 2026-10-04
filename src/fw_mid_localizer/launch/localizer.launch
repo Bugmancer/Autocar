@@ -3,7 +3,7 @@
   <arg name="start_lio" default="false" />
   <arg name="rviz" default="false" />
   <arg name="print_pose" default="false" />
-  <!-- Project laboratory map; override for another map pair or refined seed. -->
+  <!-- 默认项目实验室地图；更换地图或初值时同时核对二者的坐标关系。 -->
   <arg name="map_pcd" default="$(find fw_mid_localizer)/maps/underground/map.pcd" />
   <arg name="initial_pose" default="[0,0,0,0,0,0]" />
 

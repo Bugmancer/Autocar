@@ -1,6 +1,6 @@
 <launch>
 
-	<!--user configure parameters for ros start-->
+	<!-- ROS 启动参数配置开始。 -->
 	<arg name="lvx_file_path" default="livox_test.lvx"/>
 	<arg name="bd_list" default="100000000000000"/>
 	<arg name="xfer_format" default="0"/>
@@ -14,7 +14,7 @@
 	<arg name="msg_frame_id" default="livox_frame"/>
 	<arg name="lidar_bag" default="true"/>
 	<arg name="imu_bag" default="true"/>
-	<!--user configure parameters for ros end--> 
+	<!-- ROS 启动参数配置结束。 -->
 
 	<param name="xfer_format" value="$(arg xfer_format)"/>
 	<param name="multi_topic" value="$(arg multi_topic)"/>

@@ -15,6 +15,7 @@ M3D JrInv(const V3D &inp);
 
 struct SharedState
 {
+    // 点面残差只直接观测前 12 维位姿/外参；其余状态通过协方差耦合更新。
 public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     M12D H;
@@ -35,6 +36,8 @@ public:
 };
 struct State
 {
+    // 21 维误差顺序：世界姿态、位置、雷达到 IMU 旋转/平移、速度、陀螺/加计零偏。
+    // r_ab/t_ab 将 b 系点转换到 a 系；重力方向初始化后固定，不在误差向量内估计。
     static double gravity;
     M3D r_wi = M3D::Identity();
     V3D t_wi = V3D::Zero();
@@ -59,6 +62,7 @@ using stop_func = std::function<bool(const V21D &)>;
 
 class IESKF
 {
+    // 预测由 IMU 驱动，更新通过回调取得当前线性化点的点面约束与停止条件。
 public:
     IESKF() = default;
     void setMaxIter(size_t iter) { m_max_iter = iter; }

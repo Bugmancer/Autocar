@@ -1,9 +1,8 @@
-"""Bounded, ROS-independent swept rectangular vehicle collision checks.
+"""与 ROS 解耦、具有计算预算上限的矩形车体扫掠碰撞检查。
 
-All poses and obstacle centers use the same fixed frame.  ``occupied`` is an
-optional callable over a RAW occupancy grid; its ``resolution`` attribute must
-give the grid cell size in meters.  Unknown/out-of-map policy belongs to that
-callable.  A pre-inflated costmap would double-count the vehicle footprint.
+位姿与障碍中心必须使用同一个固定坐标系，位置单位为米、航向单位为弧度。
+可选的 ``occupied`` 查询原始占用栅格，其 ``resolution`` 属性提供米制分辨率；
+未知区域及地图外区域的策略由该查询实现。使用已膨胀代价地图会重复计入车体。
 """
 
 import math
@@ -18,6 +17,7 @@ Point2D = Tuple[float, float]
 
 @dataclass(frozen=True)
 class CollisionCheckResult:
+    """包含安全判定、已检查轨迹，以及首次碰撞位置或拒绝原因。"""
     safe: bool
     trajectory: List[Pose2D]
     collision_point: Optional[Point2D]
@@ -29,15 +29,13 @@ class _ComputationLimit(Exception):
 
 
 class FootprintCollisionChecker:
-    """Check candidate motion and, separately, stopping the current motion.
+    """分别检查候选指令和当前实测运动的制动过程。
 
-    Linear/angular braking share a scale factor so curvature remains constant.
-    The slower stopping axis sets the duration; neither deceleration exceeds its
-    configured limit.  This permits exact unicycle integration while checking a
-    conservative, executable stopping maneuver.
+    线速度和角速度按同一比例制动以保持曲率，较慢停止的轴决定制动时长，
+    两轴减速度均不超过配置上限。由此可用独轮车模型闭式积分覆盖该制动轨迹。
     """
     # 位姿和障碍点必须处于同一固定坐标系；检查结果会同时覆盖候选指令和
-    # 当前实测运动的刹车分支，任何输入/计算超限均 fail-closed。
+    # 当前实测运动的刹车分支，任何无效输入或计算超限均按不安全处理。
 
     MAX_POSES = 4096
     MAX_OBSTACLES = 100000
@@ -85,7 +83,7 @@ class FootprintCollisionChecker:
         return result
 
     def footprint(self, pose, extra_margin=0.0):
-        """Four counterclockwise corners, including configured safety margin."""
+        """返回逆时针排列的四个车体角点，包含配置及本次增加的安全边距。"""
         x, y, yaw = self._numbers(pose, 3)
         extra_margin = float(extra_margin)
         if not math.isfinite(extra_margin) or extra_margin < 0.0:
@@ -107,7 +105,7 @@ class FootprintCollisionChecker:
 
     @staticmethod
     def _advance(pose, velocity_x, velocity_yaw, effective_time):
-        # 用 unicycle 闭式积分生成弧线，避免小角度时数值除零。
+        # 用独轮车模型闭式积分生成弧线；半角形式在零角速度时仍可直接得到直线。
         x, y, yaw = pose
         angle = velocity_yaw * effective_time
         half_angle = angle * 0.5
@@ -125,7 +123,7 @@ class FootprintCollisionChecker:
             abs(vx) / self.linear_deceleration,
             abs(wz) / self.angular_deceleration,
         )
-        # With proportional braking, integrating the scale gives T_brake / 2.
+        # 速度线性同比例降至零，其积分等价于维持原速度行驶半个制动时长。
         effective_time = hold_time + braking_time * 0.5
         corner_speed_bound = abs(vx) + self._radius * abs(wz)
         swept_distance = effective_time * corner_speed_bound
@@ -136,8 +134,8 @@ class FootprintCollisionChecker:
         yield pose
         if corner_speed_bound == 0.0:
             return
-        # Every material point of the footprint moves <= sample_distance
-        # between samples, including the corners during pure rotation.
+        # 相邻采样之间车体上任一点位移不超过 sample_distance，
+        # 包括原地旋转的角点；后续碰撞膨胀会覆盖这段采样间隙。
         for index in range(1, count + 1):
             next_pose = self._advance(pose, vx, wz, effective_time * (index / count))
             if not all(math.isfinite(value) for value in next_pose):
@@ -145,6 +143,7 @@ class FootprintCollisionChecker:
             yield next_pose
 
     def _point_collides(self, pose, point, padding):
+        # 先做包围半径筛选，再把障碍变换到车体坐标，检查点到矩形的最短距离。
         dx, dy = point[0] - pose[0], point[1] - pose[1]
         if not math.isfinite(dx) or not math.isfinite(dy):
             raise ValueError("relative obstacle coordinates overflow")
@@ -160,9 +159,8 @@ class FootprintCollisionChecker:
         return math.hypot(gap_x, gap_y) <= padding
 
     def _static_collision(self, pose, occupied, resolution, cache, budget):
-        # Half-cell world lattice hits every cell, including rotated grids.
-        # A full cell diagonal covers the offset from a lattice sample inside
-        # an occupied cell to its boundary; sampling padding covers motion.
+        # 世界坐标中半格间距的采样覆盖每个栅格，包括旋转地图。
+        # 膨胀包含完整栅格对角线及运动采样间隙，覆盖查询点到占用格边界的偏移。
         step = resolution * 0.5
         padding = CollisionGeometry.static_padding(resolution, self.sample_distance)
         corners = self.footprint(pose, padding)
@@ -197,14 +195,13 @@ class FootprintCollisionChecker:
 
     def check(self, pose, velocity_x, velocity_yaw, obstacles,
               current_velocity=None, occupied=None):
-        """Return CollisionCheckResult; invalid or excessive work fails closed.
+        """返回碰撞检查结果，无效输入或预算超限均拒绝运动。
 
-        ``current_velocity`` is an optional measured ``(vx, wz)``.  On success
-        trajectory describes the candidate; on collision it is the branch that
-        failed, up to its first collision.  ``occupied.resolution`` is required
-        when a static map callback is supplied.
+        ``current_velocity`` 可传入实测 ``(vx, wz)``，单位为米每秒、弧度每秒。
+        成功时轨迹属于候选指令；碰撞时返回失败分支截至首次碰撞的轨迹。
+        提供静态地图回调时，必须同时提供 ``occupied.resolution``。
         """
-        # occupied 是原始栅格查询，不接受已膨胀 costmap，避免重复扩大车体尺寸。
+        # occupied 是原始栅格查询，不接受已膨胀代价地图，避免重复扩大车体尺寸。
         trajectory = []
         try:
             pose = self._numbers(pose, 3)
@@ -223,6 +220,7 @@ class FootprintCollisionChecker:
                 if not callable(occupied) or not math.isfinite(resolution) or resolution <= 0:
                     raise ValueError("occupied.resolution must be finite and positive")
             branches = [("", velocity, max(self.prediction_time, self.reaction_time))]
+            # 候选分支覆盖预测及制动；实测分支额外覆盖响应延迟内的惯性运动。
             if actual is not None and actual != velocity:
                 branches.append(("current_motion_", actual, self.reaction_time))
             candidate_trajectory = []
@@ -258,5 +256,5 @@ class FootprintCollisionChecker:
         except (TypeError, ValueError, OverflowError, AttributeError):
             return CollisionCheckResult(False, trajectory, None, "invalid_input")
         except Exception:
-            # A broken occupancy provider cannot be interpreted as free space.
+            # 占用查询异常不能被解释为空闲区域。
             return CollisionCheckResult(False, trajectory, None, "occupancy_error")

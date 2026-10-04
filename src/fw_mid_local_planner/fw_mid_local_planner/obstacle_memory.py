@@ -1,4 +1,4 @@
-"""Session-local 3D obstacle memory, independent of ROS and planning algorithms."""
+"""与 ROS、规划算法解耦的会话级三维障碍记忆。"""
 
 import itertools
 import math
@@ -11,15 +11,14 @@ VoxelKey = Tuple[int, int, int]
 
 
 class ObstacleMemory:
-    """Keep observed occupancy until repeated 3D rays establish free space.
+    """保存占用体素，直到三维射线提供足够次数的自由空间证据。
 
-    Ray endpoints must be actual returns, in the same fixed frame as the origin
-    and occupied points. Missing returns and range-clipped synthetic endpoints
-    are not free-space observations. The caller bounds the ray lengths/count.
-    ``clear`` explicitly starts a fresh session; there is no time-based expiry.
+    射线端点必须是真实回波，且与起点、占用点使用同一个固定坐标系，单位为米。
+    缺失回波或按量程截断得到的虚拟端点不能证明自由空间；调用方限制射线长度
+    和数量。障碍不按时间自动过期，只有显式调用 ``clear`` 才开始新会话。
     """
-    # 障碍点以固定 ``memory_frame`` 中的体素中心保存；只有经过多次射线
-    # 清空确认才删除体素，因此单帧漏检不会让规划器误以为道路已经畅通。
+    # 体素值是最近占用观测的时间戳（秒）；清空次数按扫描累计，命中会重置计数。
+    # clear_confirmations 可配置为 1，因此不能把此机制描述为强制多帧确认。
 
     def __init__(self, resolution=0.10, max_voxels=60000,
                  clear_confirmations=3, endpoint_margin=0.15,
@@ -50,8 +49,8 @@ class ObstacleMemory:
         self._last_stamp: Optional[float] = None
         self._overflowed = False
         self._revision = 0
-        # Broad phase: distance from a neighboring center to the traversed cell.
-        # The exact center-to-ray distance is checked before accepting evidence.
+        # 先按邻居中心到射线穿过体素的距离筛选偏移；接受清空证据前，
+        # 还会检查邻居中心到实际射线的距离，避免仅凭邻接关系删除障碍。
         reach = int(math.floor(self._clear_neighbor_radius / self._resolution + .5 + 1e-12))
         self._clear_offsets = [offset for offset in itertools.product(range(-reach, reach+1), repeat=3)
                                if any(offset) and sum(max(abs(v)-.5, 0)**2 for v in offset)
@@ -63,7 +62,7 @@ class ObstacleMemory:
 
     @property
     def overflowed(self):
-        """Latched loss of capacity; only an explicit clear resets this flag."""
+        """容量不足标志一旦置位就保持，只有显式清空才能解除。"""
         return self._overflowed
 
     @property
@@ -79,7 +78,7 @@ class ObstacleMemory:
         self._revision += 1
 
     def snapshot(self) -> List[Tuple[float, float, float, float]]:
-        """Return voxel centers and their most recent occupied observation time."""
+        """返回 ``(x, y, z, stamp)`` 列表，位置为体素中心，时间为最近占用观测秒数。"""
         resolution = self._resolution
         return [((key[0] + 0.5) * resolution,
                  (key[1] + 0.5) * resolution,
@@ -88,12 +87,11 @@ class ObstacleMemory:
 
     def observe(self, origin_xyz, ray_endpoints_xyz, occupied_points_xyz,
                 stamp: float, protected_endpoints_xyz=None) -> bool:
-        """Process one scan; reject invalid origins and non-increasing stamps.
+        """处理一帧扫描，拒绝无效起点和不递增的时间戳。
 
-        Invalid individual points are ignored. Multiple rays in a scan count
-        once. A positive free_confirmation_window allows unobserved scans
-        between confirmations, as needed for non-repeating LiDAR scan patterns.
-        Current hits and nearby return endpoints always override free evidence.
+        单个无效点会被忽略，同一帧内多条射线只算一次清空确认。正数确认时间窗
+        允许两次确认之间暂时没有观测，适配非重复扫描雷达；时间窗为零时要求
+        连续扫描确认。当前占用命中及附近真实回波始终优先于自由空间证据。
         """
         # 一次 observe 对应一个时间戳快照；输入无效或时间不递增时保持旧记忆。
         origin = self._point(origin_xyz)
@@ -124,8 +122,7 @@ class ObstacleMemory:
         candidates = self._voxels.keys() - hit_keys
         occluder_keys = hit_keys | {self._key(point) for point in protected}
         neighbor_cache = {}
-        # Sparse residuals: index their neighboring cells once instead of
-        # expanding every empty cell along every ray. Dense scenes use lazy caching.
+        # 稀疏残留障碍预先建立邻接索引；稠密场景按需缓存，控制射线遍历开销。
         sparse_candidates = len(candidates) <= 4*len(endpoints)
         if sparse_candidates:
             for candidate in candidates:
@@ -144,8 +141,7 @@ class ObstacleMemory:
                         break
                     if key in candidates:
                         free_keys.add(key)
-                    # Empty cells also provide evidence. Requiring an occupied
-                    # anchor leaves isolated remnants after that anchor clears.
+                    # 空体素同样能提供邻域清空证据，否则锚点清除后会留下孤立残留。
                     crossed.append(key)
                 for key in crossed:
                     if not sparse_candidates and key not in neighbor_cache:
@@ -157,20 +153,17 @@ class ObstacleMemory:
                                 and self._near_free_ray(neighbor, origin, endpoint, blocked_at)):
                             free_keys.add(neighbor)
 
-        # Preserve uncertainty near all returns, including returns filtered out
-        # of the obstacle-height band. A floor return is still an occluder.
+        # 所有回波附近都保留不确定性，包括高度过滤掉的点；地面回波也会遮挡射线。
         endpoint_bins: Dict[VoxelKey, List[Point3D]] = {}
         if free_keys or self._free_streaks:
             for point in itertools.chain(protected, occupied):
                 endpoint_bins.setdefault(self._key(point), []).append(point)
-        # 非重复扫描中的漏点不能证明障碍消失，必须累计足够的自由空间证据。
-        # Missing a voxel in a non-repeating scan is not new occupancy evidence.
-        # Retain recent free confirmations; hits still cancel them immediately.
+        # 非重复扫描中的漏点不能证明占用或自由；时间窗内保留已有确认，命中则取消。
         next_streaks = {key: count for key, count in self._free_streaks.items()
                         if self._free_confirmation_window > 0 and key in candidates
                         and stamp - self._free_stamps[key] <= self._free_confirmation_window}
         next_stamps = {key: self._free_stamps[key] for key in next_streaks}
-        # A return cancels pending evidence even on scans with no clearing ray.
+        # 即使本帧没有清空射线，附近真实回波仍会取消尚未达标的清空证据。
         for key in free_keys | next_streaks.keys():
             if self._near_endpoint(key, endpoint_bins):
                 next_streaks.pop(key, None)
@@ -195,17 +188,16 @@ class ObstacleMemory:
         return True
 
     def _relevant_endpoints(self, origin, endpoints, candidates):
-        """Conservative vectorized broad phase; full DDA still validates retained rays."""
+        """向量化筛掉不可能触及候选体素的射线，保留者仍需经过完整 DDA 检查。"""
         if not endpoints or not candidates:
             return []
-        # Avoid adding a large matrix cost in dense maps; existing DDA stays bounded.
+        # 稠密场景直接使用 DDA，避免候选体素与射线矩阵占用过多内存。
         if len(candidates) > 2400:
             return endpoints
         centers = (np.asarray(list(candidates), dtype=float)+.5)*self._resolution
         relative = centers - np.asarray(origin)
         squared = np.sum(relative*relative, axis=1)
-        # Half the cell diagonal includes every exact-ray voxel intersection,
-        # even with the optional neighbor clearing disabled.
+        # 半个体素对角线覆盖所有实际射线交点，即使禁用邻域清空也不会漏筛相交体素。
         radius = max(self._clear_neighbor_radius, math.sqrt(3)*self._resolution/2)
         retained = []
         for start in range(0, len(endpoints), 64):
@@ -223,6 +215,7 @@ class ObstacleMemory:
         return retained
 
     def _near_free_ray(self, key, origin, endpoint, blocked_at):
+        """仅接受真实回波及遮挡物前方、距离射线足够近的体素中心。"""
         delta = tuple(b-a for a, b in zip(origin, endpoint))
         distance = math.hypot(*delta)
         if distance <= self._endpoint_margin:
@@ -232,7 +225,7 @@ class ObstacleMemory:
         projection = sum((p-o)*d for p, o, d in zip(center, origin, direction))
         limit = distance - self._endpoint_margin
         if blocked_at is not None:
-            # End before the front face of the occluder's bounding sphere.
+            # 在遮挡体素包围球的前表面之前截断，额外保留端点安全距离。
             blocked_center = tuple((k+.5)*self._resolution for k in blocked_at)
             limit = min(limit, sum((p-o)*d for p, o, d in zip(blocked_center, origin, direction))
                         - math.sqrt(3)*self._resolution/2 - self._endpoint_margin)
@@ -262,11 +255,12 @@ class ObstacleMemory:
         return result
 
     def _key(self, point: Point3D) -> VoxelKey:
+        # 使用向下取整保持负坐标与正坐标一致的半开体素区间。
         return tuple(math.floor(value * self._inverse_resolution)
                      for value in point)
 
     def _ray_voxels(self, origin: Point3D, endpoint: Point3D):
-        """Traverse positive-length voxel intersections before a real return."""
+        """用 DDA 遍历真实回波前方具有正长度交段的体素，跳过起点和端点体素。"""
         delta = tuple(endpoint[i] - origin[i] for i in range(3))
         distance = math.hypot(*delta)
         if not math.isfinite(distance) or distance <= self._endpoint_margin:
@@ -296,8 +290,7 @@ class ObstacleMemory:
                 yield current_key
             if exits_at >= limit:
                 break
-            # Advance all tied axes together so touching an edge/corner alone
-            # does not claim that a ray observed the neighboring voxel as free.
+            # 同时跨越并列轴，避免仅擦过棱或角就把相邻体素判定为自由空间。
             for axis in range(3):
                 if abs(next_t[axis] - exits_at) <= 1e-12:
                     key[axis] += step[axis]
@@ -306,6 +299,7 @@ class ObstacleMemory:
 
     def _near_endpoint(self, key: VoxelKey,
                        bins: Dict[VoxelKey, List[Point3D]]) -> bool:
+        # 按端点到整个体素包围盒的距离保护边界，不仅比较体素中心。
         radius = int(math.ceil(self._endpoint_margin / self._resolution))
         margin_squared = self._endpoint_margin ** 2
         bounds = [(index * self._resolution, (index + 1) * self._resolution)

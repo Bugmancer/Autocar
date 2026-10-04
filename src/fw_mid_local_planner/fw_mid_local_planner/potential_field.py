@@ -1,4 +1,4 @@
-"""ROS-independent force and speed calculations for the v1 follower."""
+"""与 ROS 解耦的 v1 跟踪策略：计算人工势场合力与速度请求。"""
 
 import heapq
 import math
@@ -7,12 +7,11 @@ from fw_mid_common_utils import normalize_angle
 
 
 class ArtificialPotentialFieldController:
-    """Two constant attractions, age-weighted repulsion and danger stop.
+    """叠加最多三个定幅吸引力及按观测年龄衰减的障碍斥力。
 
-    Parameters and obstacle snapshots are supplied by the owning follower.
-    Forces use map coordinates. Clearance uses the padded vehicle rectangle;
-    entering the configured danger clearance returns a zero command. The
-    parent still performs its complete swept collision check.
+    参数和障碍快照由所属跟踪器提供。合力使用地图坐标；净距按带边距的车体
+    矩形计算，危险区降低速度请求。最终是否允许运动，仍由运行时的车体扫掠
+    碰撞检查与实测速度制动检查决定。
     """
 
     def __init__(self, follower):
@@ -42,15 +41,14 @@ class ArtificialPotentialFieldController:
         return max(previous - delta, min(previous + delta, target))
 
     def sync_command(self, vx, wz, requested_vx=None, requested_wz=None):
-        """Follow downstream reductions without losing sub-deadband ramps."""
+        """同步下游限速结果，并保留尚未越过输出死区的连续速度爬升状态。"""
         requested = (requested_vx, requested_wz)
         actual = (vx, wz)
         ramp = self.prev_cmd
         synced = []
         for index in (0, 1):
-            # A zero output below the controller deadband is intentional and
-            # must not reset the continuous limiter state. A zero output for
-            # an explicit stop must reset it.
+            # 控制器死区导致的零输出不重置连续限加速度状态，避免永远无法起步；
+            # 下游显式停车则应同步零速度，下一次从停止状态重新爬升。
             if (requested[index] is not None
                     and abs(requested[index]) < (self.follower.apf_deadband_v
                         if index == 0 else self.follower.apf_deadband_wz)
@@ -62,12 +60,7 @@ class ArtificialPotentialFieldController:
         self.last_command = (vx, wz)
 
     def _targets(self, path, robot_pose):
-        """选择吸引点，智能跳过已偏离的路径点。
-
-        返回三个吸引点：近点、远点、更远点。
-        当车辆因避障偏离A*路径较远时，不再强制回头追第一个路径点，
-        而是选择更前方、在车辆前进方向上的路径点作为吸引点。
-        """
+        """在路径前部搜索近目标，并按索引步长选择最多三个不同的吸引点。"""
         if not path:
             return None, None, None
 
@@ -78,9 +71,7 @@ class ArtificialPotentialFieldController:
         near_idx = 0
         for i in range(min(len(path), self.follower.apf_waypoint_stride * 2)):
             px, py = self._point_xy(path[i])
-            # 计算路径点相对车辆的位置
             dx, dy = px - rx, py - ry
-            # 投影到车身坐标系：forward为前方距离
             forward = dx * cos_yaw + dy * sin_yaw
             distance = math.hypot(dx, dy)
 
@@ -88,14 +79,10 @@ class ArtificialPotentialFieldController:
             if i < len(path) - 1 and (forward < -0.3 or (forward < 0 and distance > 0.5)):
                 continue
 
-            # 找到第一个可接受的点
             near_idx = i
             break
 
-        # 远点：在近点基础上加stride
         far_idx = min(near_idx + self.follower.apf_waypoint_stride, len(path) - 1)
-
-        # 更远点：在远点基础上再加stride
         farther_idx = min(far_idx + self.follower.apf_waypoint_stride, len(path) - 1)
 
         near = path[near_idx]
@@ -105,13 +92,14 @@ class ArtificialPotentialFieldController:
         return near, far, farther
 
     def _age_weight(self, stamp, now):
+        # 新鲜度窗口内不衰减，之后按秒指数衰减并保留非零权重下限。
         p = self.follower
         age = max(0.0, now - stamp - p.dynamic_layer.timeout)
         return max(p.apf_memory_min_weight,
                    math.exp(-age / p.apf_memory_decay_time))
 
     def _nearby_obstacles(self, robot_pose, now):
-        """Keep timestamps aligned; compute clearance before the force budget."""
+        """保持点与时间戳对应，先计算全部候选点净距，再限制参与合力的点数。"""
         p = self.follower
         self.nearest_clearance = float("inf")
         if not p.dynamic_layer.enabled:
@@ -119,8 +107,7 @@ class ArtificialPotentialFieldController:
         rx, ry, yaw = robot_pose
         c, s = math.cos(yaw), math.sin(yaw)
         g = p.geometry
-        # Include the danger band around every corner of the body,
-        # as well as the complete center-based repulsive influence band.
+        # 搜索范围覆盖车体每个角的危险带，以及以车体中心计距的完整斥力影响带。
         search_radius = max(
             p.apf_obstacle_influence_distance + p.apf_obstacle_radius,
             g.body_radius + p.apf_obstacle_radius + p.apf_danger_clearance)
@@ -131,7 +118,7 @@ class ArtificialPotentialFieldController:
             dx, dy = x - rx, y - ry
             if math.hypot(dx, dy) > search_radius:
                 continue
-            # Vertical stacks share one XY force, using their latest hit.
+            # 同一 XY 位置的竖直体素列只产生一份平面斥力，采用最新命中时间。
             key = (x, y)
             cells[key] = max(stamp, cells.get(key, stamp))
         candidates = []
@@ -153,6 +140,7 @@ class ArtificialPotentialFieldController:
         return 0.0, 0.0, 0.0
 
     def compute(self, robot_pose, path, _target, dt):
+        """从米制地图位姿和路径计算 ``(vx, 0, wz)``，dt 使用秒。"""
         if not path:
             self.reset()
             return self._zero("no_path")
@@ -162,13 +150,13 @@ class ArtificialPotentialFieldController:
         if (not all(math.isfinite(v) for v in (rx, ry, yaw, dt, now)) or dt <= 0):
             return self._zero("invalid_input")
         if self._path_end is not path[-1]:
-            # Parent copies/prunes lists but retains PathPoint objects. A new
-            # accepted A* path (even at the same coordinates) has a new end
-            # object. A pending request alone must not reset the filter.
+            # 运行时复制或裁剪列表时保留 PathPoint 对象；收到新的 A* 路径后，
+            # 即使终点坐标相同也会换终点对象。仅发起重规划请求不重置滤波器。
             self.last_force = self.last_heading = None
             self._path_end = path[-1]
         near, far, farther = self._targets(path, robot_pose)
         ax = ay = 0.0
+        # 每个目标只贡献指定幅值的单位方向吸引力，距离不放大该目标的权重。
         for target, gain in ((near, p.apf_near_attraction_gain),
                              (far, p.apf_far_attraction_gain),
                              (farther, p.apf_farther_attraction_gain)):
@@ -193,8 +181,8 @@ class ArtificialPotentialFieldController:
             dx, dy = rx - ox, ry - oy
             distance = math.hypot(dx, dy)
             if distance < 1e-9:
-                # Direction is undefined at the center; clearance below will
-                # command a stop, and the footprint check rejects overlap.
+                # 障碍与车体中心重合时斥力方向未定义；此处跳过方向计算，
+                # 后续净距逻辑会降速，运行时车体碰撞检查负责拒绝重叠运动。
                 continue
             gap = max(distance - p.apf_obstacle_radius, 1e-3)
             if gap >= influence:
@@ -211,13 +199,13 @@ class ArtificialPotentialFieldController:
         if not math.isfinite(norm):
             return self._zero("invalid_force")
 
-        # 危险区域降速策略：不驻车，而是降速并沿当前方向缓行
+        # 危险区域降低速度请求；安全放行仍取决于下游碰撞及制动检查。
         danger_speed_scale = 1.0
         if self.nearest_clearance <= p.apf_danger_clearance:
             self.status = "danger_zone"
-            # 使用线性插值：clearance从0到danger_clearance，速度从10%到100%
+            # 按净距比例缩放速度，最低保留 10% 请求，避免该层直接将速度归零。
             danger_speed_scale = max(0.10, self.nearest_clearance / max(0.01, p.apf_danger_clearance))
-            # 在危险区域时，继续使用吸引力方向（忽略斥力），避免原地打转
+            # 仅当合力接近零时退回纯吸引力方向；正常危险区仍保留障碍斥力。
             if norm < p.apf_force_epsilon:
                 # 如果合力为零，则使用纯吸引力方向
                 raw = (ax, ay)
@@ -230,7 +218,7 @@ class ArtificialPotentialFieldController:
         elif norm < p.apf_force_epsilon:
             return self._zero("force_cancelled")
 
-        # Filter vectors, not angles, to avoid discontinuity at +/- pi.
+        # 对向量滤波而非航向角滤波，避免正负 pi 交界处的不连续跳变。
         tau = p.apf_force_filter_time
         alpha = -math.expm1(-dt / tau) if tau > 0.0 else 1.0
         force = raw if self.last_force is None else tuple(
@@ -241,34 +229,25 @@ class ArtificialPotentialFieldController:
         self.last_heading = math.atan2(force[1], force[0])
         error = normalize_angle(self.last_heading - yaw)
         raw_error = normalize_angle(math.atan2(raw[1], raw[0]) - yaw)
-        # A newly reversed force immediately removes forward motion, even
-        # while the filtered direction/turn rate still catches up.
+        # 转弯减速同时参考未滤波方向，避免滤波滞后使急转弯时仍保持高速度。
         turn_error = max(abs(error), abs(raw_error))
 
         gx, gy = self._point_xy(path[-1])
         goal_distance = math.hypot(gx - rx, gy - ry)
         speed = p.command_max_vx
-        speed_reason = "full_speed"
 
         if goal_distance < p.apf_goal_approach_distance:
             speed *= max(p.apf_min_speed_scale, goal_distance / p.apf_goal_approach_distance)
-            speed_reason = "goal_approach"
 
         if turn_error >= p.apf_stop_rotate_yaw:
             speed *= p.apf_min_speed_scale  # 保持最低速度而不是完全停止
-            speed_reason = "large_turn"
         else:
             speed *= max(p.apf_min_speed_scale, 1.0 - turn_error / p.apf_slowdown_yaw)
-            if turn_error > p.apf_slowdown_yaw * 0.5:
-                speed_reason = "turn_slowdown"
 
         if 0.0 < speed < p.apf_min_vx and goal_distance > 0.25:
             speed = min(p.command_max_vx, p.apf_min_vx)
-            speed_reason = "min_vx_enforced"
 
         # 应用危险区域降速系数
-        if danger_speed_scale < 1.0:
-            speed_reason = f"danger_zone_{danger_speed_scale:.2f}"
         speed *= danger_speed_scale
 
         vx = self._limit_rate(speed, self.prev_cmd[0], p.apf_accel_limit_v, dt)
@@ -277,17 +256,9 @@ class ArtificialPotentialFieldController:
         wz = max(-p.command_max_wz, min(p.command_max_wz, wz))
         self.prev_cmd = (vx, wz)
 
-        # Preserve the continuous ramp, so a short timestep cannot keep the
-        # limiter permanently below the output deadband.
+        # 保存死区处理前的连续速度，避免较短控制周期使限速器一直困在输出死区。
         out_v = 0.0 if vx < p.apf_deadband_v else vx
         out_w = 0.0 if abs(wz) < p.apf_deadband_wz else wz
-
-        # 当输出速度为零时，记录详细原因
-        if out_v < 0.001:
-            rospy.logwarn_throttle(0.5,
-                "APF output ZERO: vx=%.4f deadband=%.3f reason=%s turn_err=%.2f° clearance=%.3fm goal_dist=%.2fm",
-                vx, p.apf_deadband_v, speed_reason, math.degrees(turn_error),
-                self.nearest_clearance, goal_distance)
 
         self.last_command = (out_v, out_w)
         self.status = "tracking"

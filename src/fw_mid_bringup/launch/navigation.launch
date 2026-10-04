@@ -1,19 +1,21 @@
 <launch>
-  <!-- Use the project-owned laboratory map pair by default; override all three
-       values when testing another map or a refined initial pose. -->
+  <!-- 默认使用项目实验室地图对；更换地图时同步核对 PCD、二维地图及初始位姿。 -->
   <arg name="map_pcd" default="$(find fw_mid_localizer)/maps/underground/map.pcd" />
   <arg name="map_yaml_path" default="$(find fw_mid_global_planner)/maps/underground/map_2d.yaml" />
-  <!-- Approximate map origin; refine by relocalization/RViz before driving. -->
+  <!-- 初值默认取地图原点，实际行驶前需通过重定位或 RViz 校准。 -->
   <arg name="initial_pose" default="[0,0,0,0,0,0]" />
   <arg name="start_lidar" default="true" />
   <arg name="takeover_video_address" default="true" />
   <arg name="start_lio" default="true" />
+  <!-- 默认禁用实车 CAN 输出；开启前仍需满足控制链各级定位和传感器有效性检查。 -->
   <arg name="enable_can" default="false" />
   <arg name="start_rviz" default="false" />
   <arg name="can_interface" default="can0" />
   <arg name="max_vx" default="0.05" />
   <arg name="max_wz" default="5.0" />
-  <arg name="follower_node" default="path_follower_node.py" />
+  <!-- 两个独立跟随节点二选一；follower_node 保留旧调用兼容并可覆盖策略映射。 -->
+  <arg name="follower_variant" default="classic" />
+  <arg name="follower_node" default="$(eval {'classic': 'path_follower_node.py', 'apf': 'path_follower_node_v1.py'}[arg('follower_variant')])" />
   <arg name="body_to_base_link" default="0.28991 0.0 -0.81317 0.0 -0.785398 0.0" />
   <arg name="lio_config" default="$(find fw_mid_fastlio2)/config/lio.yaml" />
   <arg name="localizer_config" default="$(find fw_mid_localizer)/config/localizer.yaml" />
@@ -43,6 +45,7 @@
     <arg name="max_vx" value="$(arg max_vx)" />
     <arg name="max_wz" value="$(arg max_wz)" />
     <arg name="follower_node" value="$(arg follower_node)" />
+    <arg name="follower_variant" value="$(arg follower_variant)" />
   </include>
   <include file="$(find fw_mid_ctrl)/launch/navigation_driver.launch">
     <arg name="start_can" value="$(arg enable_can)" />
@@ -51,7 +54,7 @@
     <arg name="max_wz" value="$(arg max_wz)" />
   </include>
 
-  <!-- Optional GUI. The project config includes the desired-motion arrow. -->
+  <!-- 可选可视化；项目配置包含期望运动方向箭头。 -->
   <node if="$(arg start_rviz)" pkg="rviz" type="rviz"
         name="navigation_rviz"
         args="-d $(find fw_mid_localizer)/rviz/localizer.rviz"

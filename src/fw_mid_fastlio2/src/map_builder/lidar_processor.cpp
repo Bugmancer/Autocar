@@ -17,6 +17,7 @@ LidarProcessor::LidarProcessor(Config &config, std::shared_ptr<IESKF> kf) : m_co
         m_scan_filter.setLeafSize(m_config.scan_resolution, m_config.scan_resolution, m_config.scan_resolution);
     }
 
+    // 滤波器每轮迭代重新计算匹配；停止阈值分别按角度与厘米评估姿态/平移增量。
     m_kf->setLossFunction([&](State &s, SharedState &d)
                           { updateLossFunc(s, d); });
     m_kf->setStopFunction([&](const V21D &delta) -> bool
@@ -27,6 +28,7 @@ LidarProcessor::LidarProcessor(Config &config, std::shared_ptr<IESKF> kf) : m_co
 
 void LidarProcessor::trimCloudMap()
 {
+    // 维护随雷达移动的立方体局部地图，只删除移动后离开窗口的边缘区域。
     m_local_map.cub_to_rm.clear();
     const State &state = m_kf->x();
     Eigen::Vector3d pos_lidar = state.t_wi + state.r_wi * state.t_il;
@@ -89,6 +91,7 @@ void LidarProcessor::trimCloudMap()
 
 void LidarProcessor::incrCloudMap()
 {
+    // 使用校正后位姿插入地图，优先保留靠近体素中心的点，控制地图密度。
     if (m_cloud_down_lidar->empty())
         return;
     const State &state = m_kf->x();
@@ -152,12 +155,7 @@ void LidarProcessor::initCloudMap(PointVec &point_vec)
 
 void LidarProcessor::process(SyncPackage &package)
 {
-    // m_kf->setLossFunction([&](State &s, SharedState &d)
-    //                       { updateLossFunc(s, d); });
-    // m_kf->setStopFunction([&](const V21D &delta) -> bool
-    //                       { V3D rot_delta = delta.block<3, 1>(0, 0);
-    //                         V3D t_delta = delta.block<3, 1>(3, 0);
-    //                         return (rot_delta.norm() * 57.3 < 0.01) && (t_delta.norm() * 100 < 0.015); });
+    // 先降采样并按实际点数调整缓存，再裁剪地图、匹配更新，最后插入当前扫描。
     if (m_config.scan_resolution > 0.0)
     {
         m_scan_filter.setInputCloud(package.cloud);
@@ -183,6 +181,7 @@ void LidarProcessor::process(SyncPackage &package)
 
 void LidarProcessor::updateLossFunc(State &state, SharedState &share_data)
 {
+    // 独立计算每个雷达点在世界系的邻域和平面；并行循环只写该点对应的缓存。
     int size = m_cloud_down_lidar->size();
 #ifdef MP_EN
     omp_set_num_threads(MP_PROC_NUM);
@@ -210,6 +209,7 @@ void LidarProcessor::updateLossFunc(State &state, SharedState &share_data)
 
         Eigen::Vector4d pabcd;
         m_point_selected_flag[i] = false;
+        // 邻域必须满足平面残差阈值，再按量程归一化点面误差筛选有效约束。
         if (esti_plane(points_near, 0.1, pabcd))
         {
             double pd2 = pabcd(0) * point_world_vec(0) + pabcd(1) * point_world_vec(1) + pabcd(2) * point_world_vec(2) + pabcd(3);
@@ -240,6 +240,7 @@ void LidarProcessor::updateLossFunc(State &state, SharedState &share_data)
         std::cerr << "NO Effective Points!" << std::endl;
         return;
     }
+    // 将有效点的雅可比累加为信息矩阵 H 与残差梯度 b，供迭代误差状态滤波器求解。
     share_data.valid = true;
     share_data.H.setZero();
     share_data.b.setZero();

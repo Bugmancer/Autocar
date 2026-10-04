@@ -1,14 +1,17 @@
+# 点云处于里程计 child_frame；定位器发布 map 到连续 local_frame 的校正。
 cloud_topic: /fastlio2/body_cloud
 odom_topic: /fastlio2/lio_odom
 map_frame: map
 local_frame: lidar
 update_hz: 1.0
 
+# 粗配准：体素尺寸单位米，fitness 门限为最近邻平方距离均值（平方米）。
 rough_scan_resolution: 0.25
 rough_map_resolution: 0.25
 rough_max_iteration: 5
 rough_score_thresh: 0.2
 
+# 精配准使用粗配准结果作为初值，两级都收敛且通过分数门限才接受结果。
 refine_scan_resolution: 0.1
 refine_map_resolution: 0.1
 refine_max_iteration: 10

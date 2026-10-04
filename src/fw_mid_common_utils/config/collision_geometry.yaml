@@ -1,8 +1,10 @@
-# Shared by A*, path processing, motion checks and RViz. Distances are meters.
+# A*、路径处理、运动碰撞检查和 RViz 共用的几何尺寸，长度单位均为米。
+# 以前后悬和半宽描述矩形车体；安全余量同时扩展纵向和横向边界。
 footprint_front: 0.34
 footprint_rear: 0.34
 footprint_half_width: 0.275
 footprint_margin: 0.02
+# 障碍记忆体素尺寸和轨迹碰撞采样间距也会参与规划膨胀的误差预算。
 dynamic_memory_resolution: 0.10
 collision_sample_distance: 0.025
 # planner_tracking_clearance: A*规划时的额外安全间隙，最小值0.0

@@ -13,42 +13,41 @@ static_map_topic: /astar_planner_node/map
 
 control_rate: 10.0
 lookahead_distance: 0.50
-waypoint_tolerance: 0.20  # 严格：减少路径点提前舍去 (从0.25→0.20m)
-goal_tolerance: 0.28      # 严格：减少目标点提前舍去 (从0.35→0.28m, -20%)
+waypoint_tolerance: 0.20
+goal_tolerance: 0.28
 tracking_controller: pid
 
-# path_follower_node_v1.py: two discrete path targets plus point-cloud APF.
-# The first target has the larger attraction and the second target smooths
-# the direction change. The original node ignores these parameters.
+# APF 使用最多三个路径目标的吸引力与点云障碍斥力；经典策略忽略以下 apf_* 参数。
 apf_waypoint_stride: 4
-apf_near_attraction_gain: 1.50   # 第一个点（近点）：最强吸引力
-apf_far_attraction_gain: 1.20    # 第二个点（远点）：次强吸引力 (从1.00→1.20)
-apf_farther_attraction_gain: 0.80  # 第三个点（更远点）：第三档吸引力，帮助向前看
-apf_repulsive_gain: 0.015       # 再次大幅降低：进一步削弱斥力 (从0.03→0.015, -50%)
-apf_obstacle_influence_distance: 0.60  # 大幅缩小：只有很近的障碍物才产生斥力 (从0.90→0.60m)
-apf_repulsive_max_force: 3.0    # 再次降低：限制最大斥力 (从4.5→3.0, -33%)
+apf_near_attraction_gain: 1.50
+apf_far_attraction_gain: 1.20
+apf_farther_attraction_gain: 0.80
+apf_repulsive_gain: 0.015
+apf_obstacle_influence_distance: 0.60
+apf_repulsive_max_force: 3.0
 apf_max_obstacles: 300
 apf_heading_gain: 1.80
-apf_stop_rotate_yaw: 1.85  # 进一步增加：允许更大角度偏差 (从1.45→1.85, ~106°)
-apf_slowdown_yaw: 1.40     # 进一步增加：减少转弯降速 (从1.00→1.40, ~80°)
+# 大转角保留 apf_min_speed_scale 对应的候选速度，最终仍须通过公共碰撞检查。
+apf_stop_rotate_yaw: 1.85
+apf_slowdown_yaw: 1.40
 apf_goal_approach_distance: 0.80
-apf_min_speed_scale: 0.50  # 提高：转弯最低速度 (从0.40→0.50, 即50%)
-apf_min_vx: 0.08           # 提高：最低速度阈值 (从0.04→0.08m/s)
+apf_min_speed_scale: 0.50
+apf_min_vx: 0.08
 apf_force_epsilon: 0.0001
-apf_accel_limit_v: 0.50    # 提高：允许更快的加速 (从0.25→0.50m/s²)
-apf_accel_limit_wz: 0.50   # 提高：允许更快的角加速 (从0.30→0.50rad/s²)
-apf_deadband_v: 0.010      # 降低：减少速度死区 (从0.015→0.010m/s)
-apf_deadband_wz: 0.020     # 降低：减少角速度死区 (从0.025→0.020rad/s)
-# Danger clearance is measured from the padded rectangular body, less the
-# obstacle voxel radius, NOT distance from base_link. Entering it parks.
-apf_danger_clearance: 0.01  # 进一步降低：只有非常近才触发 (从0.05→0.01m)
-# Vector low-pass time constant in seconds; 0 disables filtering.
+apf_accel_limit_v: 0.50
+apf_accel_limit_wz: 0.50
+apf_deadband_v: 0.010
+apf_deadband_wz: 0.020
+# 危险净空为障碍到带余量矩形车身的距离，再减去障碍体素半径，不是到车心的距离。
+# 此值控制 APF 候选速度缩放；最终命令仍需检查车身扫掠和实测制动轨迹。
+apf_danger_clearance: 0.01
+# 合力向量低通滤波时间常数，单位秒；0 表示禁用滤波。
 apf_force_filter_time: 0.20
-# Recent observations retain full weight for dynamic_obstacle_timeout.
-# Afterwards only APF repulsion decays; A*/collision occupancy never decays.
+# 在 dynamic_obstacle_timeout 内保持完整观测权重；之后只衰减 APF 斥力。
+# A* 和碰撞检查使用的障碍占用不随时间衰减。
 apf_memory_decay_time: 2.0
 apf_memory_min_weight: 0.25
-# Sustained force cancellation triggers A* again in astar_replan mode.
+# astar_replan 模式下，持续合力抵消超过此时间后重新请求 A*。
 apf_stall_replan_time: 2.0
 
 path_enable_shortcut: true
@@ -69,7 +68,7 @@ pid_k_v: 0.55
 pid_ki_v: 0.00
 pid_kd_v: 0.00
 pid_min_vx: 0.04
-# Linear cruise speed and cap come from command_max_vx (launch max_vx).
+# 直线巡航速度和纵向上限来自 command_max_vx，即 launch 的 max_vx。
 pid_max_wz: 0.22
 pid_yaw_deadband: 0.035
 pid_integral_limit: 0.40
@@ -95,70 +94,67 @@ pp_deadband_wz: 0.025
 
 enable_dynamic_obstacles: true
 dynamic_cloud_topic: /fastlio2/body_cloud
-dynamic_obstacle_timeout: 0.80  # 增加：允许更长的处理时间 (从0.50→0.80s)
-# New obstacle hits must be inside this base_link box; RViz shows its boundary.
+dynamic_obstacle_timeout: 0.80
+# 新占用点必须位于 base_link 下的此观测框内；RViz 显示框的边界。
 dynamic_x_min: -1.50
 dynamic_x_max: 2.50
 dynamic_y_abs: 1.50
 dynamic_z_min: -0.30
 dynamic_z_max: 1.50
 dynamic_ground_filter_enabled: true
-# Reject z <= this height after transforming into base_link (meters).
+# 转到 base_link 后滤除不高于此高度的点，单位米。
 dynamic_ground_z_max: 0.12
-# Process every incoming cloud, but sample fewer points to keep one callback
-# below the 0.5 s freshness watchdog. This is point sampling, not frame skipping.
+# 每帧都处理，按点抽样降低负载，不跳过整帧。
 dynamic_point_step: 3
 dynamic_max_points: 1600
 dynamic_cluster_distance: 0.35
-# Same-scan 3D support before memory/inflation, including the point itself.
-# Exact duplicate coordinates count once; isolated hits never mark occupancy.
+# 写入记忆和膨胀前，要求同一扫描内存在足够三维邻点，计数包含自身。
+# 完全重合的坐标只计一次，孤立点不写入占用。
 dynamic_obstacle_support_radius: 0.15
 dynamic_obstacle_support_min_points: 3
 
-# Session-only 3D memory in FAST-LIO's continuous world frame.
+# 三维记忆仅保存在当前进程内，使用 FAST-LIO 连续世界坐标系。
 dynamic_memory_frame: lidar
-# Vehicle dimensions, margin, voxel size and collision sampling are shared in
-# fw_mid_common_utils/config/collision_geometry.yaml (geometry_config launch arg).
+# 车身尺寸、余量、体素大小和碰撞采样共用下述文件，由 geometry_config 参数指定：
+# fw_mid_common_utils/config/collision_geometry.yaml（路径）。
 dynamic_memory_max_voxels: 60000
 dynamic_memory_clear_enabled: true
 dynamic_memory_clear_confirmations: 1
-# Clear on the first valid free ray, within a fixed 15 cm tube (not recursive).
-# Must be <= 2 * dynamic_memory_resolution; zero restores exact-ray clearing.
+# 第一条有效空闲射线即可清理固定 15 cm 管道内的记忆，不递归扩散。
+# 半径不得超过两倍 dynamic_memory_resolution；0 表示只沿精确射线清理。
 dynamic_memory_clear_neighbor_radius: 0.15
-# Only relevant when confirmations > 1; this is NOT a memory TTL.
+# 仅在 confirmations > 1 时用于空闲确认，不能当作记忆过期时间。
 dynamic_memory_free_confirmation_window: 1.0
 dynamic_memory_endpoint_margin: 0.15
 dynamic_memory_max_clear_rays: 600
-# Longer real returns may clear old memory, but cannot mark hits outside the box.
+# 较远的真实回波可清理旧记忆，但观测框外的回波不能写入新占用。
 dynamic_max_range: 8.0
-# Physical laser origin expressed in /fastlio2/body_cloud (FAST-LIO t_il).
+# 雷达物理光心在 /fastlio2/body_cloud 坐标系中的位置，对应 FAST-LIO 的 t_il。
 dynamic_sensor_origin: [-0.011, -0.02329, 0.04412]
 dynamic_self_filter_z_max: 0.65
 
 collision_check_enabled: true
 collision_speed_reduction_enabled: true
 collision_require_static_map: true
-collision_prediction_time: 0.8      # 降低：减少预测时间 (从1.0→0.8s)
-collision_reaction_time: 0.15       # 降低：减少反应时间 (从0.2→0.15s)
-collision_linear_deceleration: 0.20  # 降低：更慢的减速要求 (从0.25→0.20m/s²)
-collision_angular_deceleration: 0.40 # 降低：更慢的角减速要求 (从0.5→0.40rad/s²)
+collision_prediction_time: 0.8
+collision_reaction_time: 0.15
+collision_linear_deceleration: 0.20
+collision_angular_deceleration: 0.40
 start_recovery_enabled: true
-# Includes room to select an exit beyond the inflation boundary.
+# 最大恢复距离需覆盖到膨胀区外出口的搜索空间。
 start_recovery_max_distance: 1.2
-# Recovery uses command_max_vx, including its full-speed braking check.
+# 恢复使用 command_max_vx，并按该速度检查完整制动过程。
 
 dynamic_emergency_stop: true
 emergency_stop_mode: center_envelope
-# Early emergency envelope is measured from base_link, not the body edge.
-# The full swept footprint and measured braking checks still apply outside it.
-dynamic_center_stop_radius: 0.25  # 缩小：减少误触发 (从0.40→0.25m)
+# 早期紧急停车包络从 base_link 原点量起；包络外仍检查完整车身扫掠和实测制动。
+dynamic_center_stop_radius: 0.25
 emergency_x_min: 0.00
-emergency_x_max: 0.30  # 缩小：只在非常近时紧急停止 (从0.40→0.30m)
-emergency_y_abs: 0.25  # 缩小：减少侧方误触发 (从0.30→0.25m)
+emergency_x_max: 0.30
+emergency_y_abs: 0.25
 
 dynamic_avoidance_mode: astar_replan
-# Normal obstacle detections keep the existing collision/replan behavior.
-# Speed degradation is reserved for a short radar dropout window below.
+# 常规障碍检测沿用碰撞检查和重规划流程；短时雷达中断的降速窗口由下方参数控制。
 obstacle_slowdown_enabled: false
 obstacle_slowdown_distance: 0.30
 obstacle_min_speed_scale: 0.35
@@ -181,9 +177,9 @@ dynamic_astar_replan_period: 1.00
 dynamic_obstacle_update_dist: 0.30
 dynamic_obstacle_points_topic: /local_planner/dynamic_obstacle_points
 dynamic_keep_moving_during_replan: true
-# Replanning keeps normal tracking limits; each command still passes the guard.
+# 重规划期间保持普通跟踪限幅，每条输出命令仍须通过最终安全检查。
 planner_service_timeout: 0.50
-# Only used with acknowledgment disabled (e.g. a standalone test planner).
+# 仅在禁用快照确认时使用，例如独立测试规划器；等待固定时间不能保证快照已经应用。
 planner_overlay_settle_time: 0.03
 require_overlay_ack: true
 dynamic_overlay_ack_topic: /astar_planner_node/dynamic_overlay_stamp

@@ -1,322 +1,94 @@
 # fw_mid_local_planner
 
-ROS1 Noetic 局部规划包：跟踪 `fw_mid_global_planner` 的 A* 路径，将 FAST-LIO
-点云写入本次会话的障碍记忆，并在发布速度前检查完整车身的运动及制动轨迹。
-默认以 PID 跟踪，可切换 Pure Pursuit。
+局部导航执行层：接收目标，调用 A*，处理路径，维护点云障碍记忆，并在车身与制动碰撞检查后发布 `/cmd_vel`。整车构建、地图、网络、CAN 和停机操作见[工作区说明](../../README.md)。
 
-实验性的人工势场跟踪器位于 `scripts/path_follower_node_v1.py`。它复用本节点的
-目标接收、FAST-LIO 障碍记忆、A* `/astar_planner_node/get_plan` 动态重规划和最终
-车身碰撞检查，只替换路径跟踪器：从处理后的离散路径按 `apf_waypoint_stride` 取
-两个未到达点，近点吸引力较大，远点用于平滑；实时障碍点在影响半径内产生随距离
-减小而增强的斥力，合力方向转换成 `cmd_vel`。可通过现有 launch 选择：
+## 选择策略
+
+`path_follower_node.py` 与 `path_follower_node_v1.py` 是独立可执行入口，组合共用的导航运行逻辑和各自的跟踪策略；v1 不继承旧节点。两者保留 ROS 节点名 `/path_follower_node`，接口和安全检查一致，每次只能运行一个。
 
 ```bash
-roslaunch fw_mid_local_planner local_planner.launch \
-  follower_node:=path_follower_node_v1.py
+# 默认 PID / Pure Pursuit 策略
+bash scripts/ros1.sh roslaunch fw_mid_bringup navigation.launch follower_variant:=classic
+
+# 人工势场策略
+bash scripts/ros1.sh roslaunch fw_mid_bringup navigation.launch follower_variant:=apf
 ```
 
-完整导航启动时使用同名参数：
+这些命令默认不启用 CAN；初值、地图和硬件放行步骤见根文档。切换前停止原 launch，等待退出后再启动，并用 `rostopic info /cmd_vel` 确认只有一个速度发布者。
+
+`follower_variant` 默认 `classic`，仅接受 `classic`、`apf`。旧 `follower_node` 参数兼容 `path_follower_node.py` 和 `path_follower_node_v1.py`，显式设置时覆盖策略选择；新命令优先使用 `follower_variant`。
+
+代码入口只负责启动：`follower_runtime.py` 维护公共导航与安全流程，`tracking.py` / `apf_tracking.py` 实现策略；公共参数和 RViz 输出分别放在 `follower_parameters.py`、`follower_visualization.py`。
+
+独立调试需先准备 A*、点云和 TF，再启动：
 
 ```bash
-roslaunch fw_mid_bringup navigation.launch \
-  follower_node:=path_follower_node_v1.py
+bash scripts/ros1.sh roslaunch fw_mid_local_planner local_planner.launch follower_variant:=apf require_localization:=true max_vx:=0.05 max_wz:=5.0
 ```
 
-相关参数以 `apf_` 开头，默认值在 `config/local_planner.yaml` 中；原有
-`path_follower_node.py` 仍是默认跟踪器。
+局部入口默认 `require_localization:=false`，完整导航会强制开启；独立调试示例显式开启。若其他节点已发布 `body -> base_link`，加 `publish_body_to_base_link_tf:=false`。分开启动 A* 与局部规划时，必须传入同一份 `geometry_config`。
 
-## 切换跟踪器
+## 策略行为
 
-两个跟踪器都使用节点名 `/path_follower_node`，并向同一个 `/cmd_vel` 发布速度。
-切换前先在当前 `roslaunch` 终端按 `Ctrl-C` 停止整套导航；不要让两个跟踪器同时运行。
-如果原来的启动终端已经关闭，可以先执行：
+| 策略 | 行为与配置 |
+| --- | --- |
+| `classic` | `tracking_controller: pid`（默认）或 `pure_pursuit`；参数前缀 `pid_`、`pp_` |
+| `apf` | 最多三个离散路径点的吸引力与障碍斥力合成方向；参数前缀 `apf_` |
+
+`max_vx` 是直线巡航速度和纵向上限，单位 m/s；`max_wz` 是角速度上限，单位 deg/s。控制器仍保留加速度、转弯、到点与碰撞降速。最终 `/cmd_vel` 的角速度单位是 rad/s，限幅后才做碰撞预测；独立启动底盘时必须使用相同上限。
+
+APF 从当前路径中选择近点，再按 `apf_waypoint_stride` 向前取远点和更远点；重复的终点不重复计算吸引力。合力使用向量低通滤波，停车、接受新路径或恢复段接回跟踪时清除旧滤波状态。危险区外持续合力抵消时停车，在 `astar_replan` 模式下重新请求 A*；不保证消除所有局部极小值。
+
+障碍斥力随真实观测年龄衰减，但车身碰撞检查、危险净空判定和 A* overlay 继续使用完整记忆。`apf_danger_clearance` 是障碍到带余量矩形车身的净空，再计入障碍体素半径，不是距车心的距离。当前 APF 在危险区按净空缩减候选速度，合力抵消时尝试纯吸引力方向；大转角也允许低速前行。最终输出仍须通过动态急停、完整车身及实测制动检查，不安全则停车。
+
+APF 关闭通用的 `obstacle_slowdown_enabled`，但保留上述策略内降速和共用碰撞保护。全部当前数值以 [local_planner.yaml](config/local_planner.yaml) 和共享 [collision_geometry.yaml](../fw_mid_common_utils/config/collision_geometry.yaml) 为准。修改后停车并重启节点，运行中不自动重载。
+
+## 共用安全行为
+
+- 完整导航要求定位有效、TF 新鲜。目标在定位无效时会被拒绝；已有目标在短时输入异常恢复后可能继续执行。到点按 XY 距离判定，不保证最终朝向。
+- 障碍观测按点云时间戳转换，在 FAST-LIO 连续世界系 `lidar` 中保存三维体素，再投影到 `map` 与 `base_link`。`lidar` 在此不是雷达光心。
+- 新障碍受观测范围、地面/车身和同帧邻域过滤约束；高度相对 `base_link`。低矮、细小或稀疏障碍可能被过滤，应按实车校准。
+- 记忆只在 RAM 中保存，无目标、换目标和到点都保留。真实空闲射线可清除旧体素；空点云、遮挡、盲区和观测年龄不构成清除证据。记忆满时阻止运动，不自动淘汰历史障碍。
+- 最终命令检查矩形车身的运动扫掠、反应与制动过程，使用静态地图和障碍记忆。未知区与地图外按占用处理。预测碰撞时可尝试更低候选速度，仍使用原实测速度检查制动；无安全候选就停车。
+- 默认允许在 `dynamic_obstacle_timeout` 后的短窗口内降速继续，参数为 `dynamic_degraded_*`。前提包括已有有效观测、路径和非零命令，且静态/记忆/制动检查通过；超过窗口停车。期间无法检测新障碍，当前紧急包络检查也会因数据过期返回未触发，不能保证额外配置的紧急停车距离。
+- A* 等待动态 overlay 应用确认后规划，路径后处理也检查障碍记忆。重规划期间仅在允许继续跟踪、存在旧路径且检查通过时行驶；规划失败或无法安全运动时停车。
+- 起点落入保守膨胀区时，可尝试受限前行恢复：当前车身、实测制动、完整恢复扫掠及出口到目标路径均须安全。接回路径前再次复查，偏离恢复段或无安全出口时停车；不清除真实障碍、不自动倒车。
+
+这些机制不能代替实物急停，不能感知从未观察到的侧面障碍，也不预测移动障碍的未来位置。不要放宽传感器超时或缩小几何尺寸来绕过停车。
+
+## 接口与诊断
+
+| 接口 | 用途 |
+| --- | --- |
+| `/move_base_simple/goal`、`/goal_pose` | `PoseStamped` 目标；新目标替换当前目标 |
+| `/fastlio2/body_cloud` | 默认 `body` 帧点云输入 |
+| `/astar_planner_node/get_plan` | `GetPlan` 全局规划服务 |
+| `/astar_planner_node/map`、`/astar_planner_node/costmap` | 原始栅格与膨胀/overlay 代价图 |
+| `/astar_planner_node/dynamic_overlay_stamp` | 障碍快照应用确认 |
+| `/cmd_vel` | `Twist` 速度输出，m/s 与 rad/s |
+| `/local_planner/global_plan`、`/local_planner/desired_direction` | 跟踪路径与方向箭头 |
+| `/local_planner/dynamic_obstacle_points` | 给 A* 的完整障碍记忆快照 |
+| `/dynamic_obstacles_markers` | 近期观测（绿）、历史记忆（橙）和观测范围（青） |
+| `/local_planner/collision_check` | 当前车身及预测轮廓，碰撞点用红球标记 |
+| `/local_planner/collision_blocked` | 碰撞/障碍输入联锁状态 |
+| `/path_follower_node/clear_obstacle_memory` | `Trigger`：停车、取消目标并清空记忆及 overlay |
+
+清除误记忆前确认现场环境：
 
 ```bash
-cd /home/robot/Autocar_v1
-bash scripts/ros1.sh rosnode kill /path_follower_node
+bash scripts/ros1.sh rosservice call /path_follower_node/clear_obstacle_memory "{}"
 ```
 
-首次使用 v1，或修改了 Python 代码、`CMakeLists.txt` 后，需要重新构建并加载工作区：
+清空后等待新点云并重新发目标；仍存在的障碍会重新加入记忆。单次零速消息不会取消导航，正常结束应停止 launch。
 
-```bash
-cd /home/robot/Autocar_v1
-bash scripts/ros1.sh catkin_make --pkg fw_mid_local_planner
-source devel/setup.bash
-```
+`APF:` 日志包含合力、净空与实际发布速度；`Vehicle footprint blocked`、`Dynamic obstacle emergency stop`、`Obstacle input stale` 分别表示车身碰撞、近距离急停与数据过期。`Navigation control cycle took ...` 提示计算延迟，下游 `Twist input timed out` 是独立看门狗。排查时先确认原因，不通过重复旧非零命令掩盖超时。
 
-### 切换到 v1 人工势场跟踪
+## 验证
 
-只启动局部规划器时，先确保 A* 已运行，再执行：
-
-```bash
-roslaunch fw_mid_local_planner local_planner.launch \
-  follower_node:=path_follower_node_v1.py
-```
-
-完整导航使用同一个参数：
-
-```bash
-roslaunch fw_mid_bringup navigation.launch \
-  follower_node:=path_follower_node_v1.py
-```
-
-启动日志出现 `APF v1 tracking enabled` 后，才向 `/move_base_simple/goal` 或
-`/goal_pose` 发布目标。v1 仍使用原来的点云障碍记忆、A* 动态 overlay、重规划服务和
-车身碰撞检查；进入 `apf_danger_clearance` 危险区时直接发布零速度驻车。
-
-### 切回原来的跟踪器
-
-先按上面的步骤停止当前 launch，然后显式选择原节点：
-
-```bash
-roslaunch fw_mid_local_planner local_planner.launch \
-  follower_node:=path_follower_node.py
-```
-
-完整导航对应为：
-
-```bash
-roslaunch fw_mid_bringup navigation.launch \
-  follower_node:=path_follower_node.py
-```
-
-`follower_node` 的默认值就是 `path_follower_node.py`，因此省略该参数也会回到原来的
-PID/Pure Pursuit 跟踪器：
-
-```bash
-roslaunch fw_mid_local_planner local_planner.launch
-```
-
-切换后可用下面的命令确认 `/cmd_vel` 只有一个发布者；如果仍有多个发布者，先停止
-多余的 launch，再继续发送目标：
-
-```bash
-bash scripts/ros1.sh rostopic info /cmd_vel
-```
-
-v1 的力与速度计算位于 `fw_mid_local_planner/potential_field.py`，不依赖 ROS；
-`path_follower_node_v1.py` 负责复用原节点和发布诊断。第一目标为裁剪后首个
-未到达点，第二目标为向前间隔 `apf_waypoint_stride` 个点的位置；仅剩终点时
-只计算一次吸引力。吸引力幅值保持恒定，默认近点 `1.0`、远点 `0.35`。
-
-v1 的速度与平滑参数：
-
-| 参数 | 默认值 | 含义 |
-| --- | --- | --- |
-| `apf_danger_clearance` | `0.05 m` | 车身净空进入此范围后直接驻车 |
-| `apf_force_filter_time` | `0.20 s` | 合力向量低通时间常数，设为 `0` 可关闭 |
-| `apf_memory_decay_time` | `2.0 s` | 近期观测窗口结束后的斥力指数衰减时间常数 |
-| `apf_memory_min_weight` | `0.25` | 历史障碍的最低斥力权重 |
-| `apf_stall_replan_time` | `2.0 s` | 持续合力抵消多久后重新请求 A* |
-
-净空是障碍点到带安全余量的矩形车身的距离，再减障碍体素半径，与车心距离不同。
-危险区判断使用周围全部记忆点，包含侧后方；窄通道中可能更保守。危险区外，
-斥力只改变合力方向，线速度不按障碍距离或斥力大小缩放。进入 `apf_danger_clearance`
-后直接发布零线速度和零角速度；原有动态急停、车辆扫掠和制动碰撞检查仍会更早
-触发时停车。v1 会强制关闭原节点的 `obstacle_slowdown_enabled`，避免出现渐进减速。
-
-斥力仍按车心到障碍表面的距离计算。最近 `dynamic_obstacle_timeout` 内观测的点
-权重为 `1`；超过后为 `max(apf_memory_min_weight, exp(-超出时间 / apf_memory_decay_time))`。
-时间来自体素最后一次真实命中，重新投影不会刷新时间。年龄只改变 APF 斥力；
-危险区判定、A* overlay 和车身碰撞检查继续使用完整障碍记忆。竖直方向投影到相同
-XY 的体素合并为一个斥力点，取最新命中时间，减少障碍高度导致的重复叠加。
-
-合力按向量滤波，避免航向角在正负 π 处跳变。新路径实际被接受、停车或恢复段
-接回普通跟踪时清除旧滤波方向。当前周期的危险区判定和未滤波合力仍约束运动，
-滤波不会延迟近障碍停车。下游碰撞检查停车后，下一周期从实际发布速度继续限加速；
-高控制频率下保留死区之前的累积状态，避免一直无法起步。
-
-日志 `APF:` 每秒显示原始/滤波合力、最近净空、点数、
-状态及经过碰撞检查后实际发布的 `vx/wz`。RViz 方向箭头显示滤波后的合力；
-合力抵消时删除箭头并输出零速度。在 `astar_replan` 模式下持续抵消会显式请求
-现有 A* 服务，有动态记忆时使用避障重规划，没有 overlay 时也能请求普通规划。
-这只是针对合力抵消的恢复，不保证消除所有局部极小值，也不预测移动障碍速度。
-
-在工作区根目录运行离线行为测试（需要 Python 3 和 NumPy）：
+工作区根目录运行（Python 3、NumPy）：
 
 ```bash
 python3 -m unittest discover -s src/fw_mid_local_planner/tests -v
 ```
 
-测试覆盖力和速度计算、障碍时间戳投影、碰撞记忆、重规划/恢复/发布接口。
-ROS 消息与传输使用替身，因此这些测试不能替代 ROS 联调和实车验证。
-
-## 接口
-
-| 接口 | 作用 |
-| --- | --- |
-| `/move_base_simple/goal`、`/goal_pose` | 目标输入 |
-| `/fastlio2/body_cloud` | 点云输入，默认在 `body` 坐标系 |
-| `/astar_planner_node/get_plan` | A* 规划服务 |
-| `/astar_planner_node/map`、`/astar_planner_node/costmap` | 原始静态栅格、膨胀及 overlay 后的代价图 |
-| `/astar_planner_node/dynamic_overlay_stamp` | A* 已应用障碍快照的确认 |
-| `/cmd_vel` | `geometry_msgs/Twist` 速度输出，m/s 和 rad/s |
-| `/local_planner/desired_direction` | RViz 当前跟踪方向箭头 |
-| `/local_planner/dynamic_obstacle_points` | `PoseArray` 障碍记忆完整快照，供 A* overlay 使用 |
-| `/local_planner/global_plan` | 后处理后的跟踪路径 |
-| `/dynamic_obstacles_markers` | 绿色近期观测、橙色历史记忆的障碍体素 |
-| `/local_planner/collision_check` | 蓝色当前车身轮廓、绿色通过检查或红色被拦截的预测轮廓 |
-| `/local_planner/collision_blocked` | `Bool` 碰撞检查或障碍输入联锁状态 |
-| `/path_follower_node/clear_obstacle_memory` | `Trigger` 停车、取消目标、清空障碍记忆及 overlay |
-
-本包只发布 `/cmd_vel`。完整导航入口另行启动 `fw_mid_ctrl` 的 Twist/JSON 适配器，
-并由 `enable_can` 控制是否打开 CAN；首次验证应在架空轮组或受控场地进行。
-
-## 障碍记忆与碰撞检查
-
-`obstacle_memory.py` 是无 ROS 依赖的三维体素记忆，默认 `0.10 m` 分辨率、
-最多 `60000` 个体素。`dynamic_obstacle_layer.py` 按点云时间戳转换观测，
-保存在 FAST-LIO 连续局部世界系 `lidar` 中，再投影到 `map` 和 `base_link`。
-这里的 `lidar` 是 LIO 世界坐标系，不是雷达光心坐标系。
-
-新增障碍的有效框默认相对 `base_link` 为 `-1.5 <= x <= 2.5 m`、
-`abs(y) <= 1.5 m`，高度再按地面和 Z 范围过滤。参数为 `dynamic_x_min`、
-`dynamic_x_max`、`dynamic_y_abs`。先裁剪候选点，再限制障碍点数；远处地面不再
-进入障碍记忆或挤占近处点预算。RViz 同一 MarkerArray 的青色 `observation_box`
-显示该框，原始 FAST-LIO 点云仍完整显示。框外真实回波可提供清除旧障碍的射线，
-不会作为新障碍写入；已有记忆不会因进入盲区或移到框外就被删除。
-
-地面剔除参数 `dynamic_ground_z_max` 默认由 `0.08 m` 提高到 `0.12 m`：
-点云先转换到 `base_link`，再排除 `z <= 0.12 m` 的障碍候选点。
-该数值相对 `base_link` 原点，不是雷达原始 Z 或未经校准的离地高度。
-地面回波仍用于空闲射线更新；同高度范围内的低矮障碍也会被过滤。
-若大片地板仍被误检，应检查安装外参及地面倾斜。停车重启导航后参数生效，
-之前会话中误记的地面点也会随内存重置清除，原始地图不变。
-
-记忆只在 RAM 中保存，不写入原始地图。无目标、到点或换目标都保留记忆，完整导航
-重启后为空。FAST-LIO 原点重置时也应重启导航。障碍离开视野不会按时间消失；
-后续真实射线经过原位置附近且收到更远回波，首次有效空闲观测即清除；
-不经过重规划的约 `0.3 s` 确认。当前回波覆盖的位置继续保留。
-每帧最多处理 `600` 条清除射线，射线终点默认留 `0.15 m` 保护距离。
-1 秒证据窗口仅在确认帧数手动设为大于 1 时生效；空点云、遮挡或没扫描到不算消失。
-清除同步更新 RViz、车身碰撞检查和 A* overlay，原始静态地图保持不变。
-没有被射线覆盖的侧面盲区继续保留记忆。容量耗尽时停车，不自动淘汰旧障碍。
-
-RViz 加载 `fw_mid_localizer/rviz/localizer.rviz`，Fixed Frame 使用 `map`。
-`Observed and Remembered Obstacles` 中绿色表示最近 `0.5 s` 看到的障碍，
-橙色表示历史记忆，两者都参与避障。`Vehicle Collision Prediction` 展示
-包含安全余量的当前车身和预测轮廓。当前蓝框默认为 `0.72 m x 0.59 m`；
-预测轮廓还覆盖运动和制动过程，碰撞检查另计入体素及栅格离散误差。
-
-`footprint_collision.py` 独立检查矩形车身平移、转弯和制动扫过的区域，使用
-原始静态栅格与障碍记忆；未知区和地图外视为占用。默认车身相对 `base_link`
-前后各 `0.34 m`、半宽 `0.275 m`，四周安全余量 `0.02 m`。预测 `1.0 s`，
-反应时间 `0.2 s`，制动减速度 `0.25 m/s²`、`0.5 rad/s²`，采样间距 `0.025 m`。
-这些值以及地面高度、车身过滤、雷达外参必须按实际安装和停车能力校准。
-
-新回波在写入记忆前进行同帧三维邻域过滤：默认
-`dynamic_obstacle_support_radius=0.15 m`，
-`dynamic_obstacle_support_min_points=3`（含自身，重复坐标只计一次）。
-孤立点不新增到障碍记忆或膨胀层；保留全部满足条件的点簇。
-计数发生在抽样、范围/地面/车身过滤和点数预算之后、体素合并之前；
-多个回波可能合成一个 RViz 体素。稀疏或细小障碍也可能被此门槛过滤。
-过滤后的原始回波仍作为清除射线的实际终点，不把孤立点被剔除当成空闲证据。
-盲区旧记忆和原静态地图不受该新增障碍过滤影响；重启导航生效。
-
-`dynamic_memory_clear_neighbor_radius=0.15 m` 扩大残留清除范围：沿真实空闲射线
-检查固定半径邻域，包括斜向邻格，不依赖旧占用格作为触发条件。
-相邻体素中心必须距射线不超过该半径且位于回波前方。
-默认 `dynamic_memory_clear_confirmations=1`，首次空闲观测即清除，不等第二帧。
-不递归扩大，不按时间删除盲区记忆；没有射线覆盖时仍无法清除。
-半径不能超过体素边长的 2 倍，设为 `0` 使用原来的精确射线清除。
-少量残留时先索引其周边格，避免沿每条射线反复展开大量无障碍空格；
-密集场景按需缓存邻格，清除范围、单帧规则和遮挡保护不变。
-候选旧障碍不超过 2400 格时，以最多 64 条射线一批的向量距离筛选跳过
-无关射线；距离上界同时覆盖清理半径和格子半对角线，避免漏掉贴边相交。
-筛选通过的射线仍做完整 DDA 检查，所有回波仍用于保护已有占用。
-`Obstacle cloud processing took ...` 表示点云处理超过超时阈值的一半；
-`Obstacle input stale: scan_age=... receipt_age=...` 表示数据过期触发停车，
-用于区别计算积压与碰撞停车，不通过延长传感器超时掩盖处理延迟。
-回波终点附近、当前命中及遮挡后方受保护；回波未选入清除射线预算也仍用于保护。
-这是对离散残留的空间容差，附近未被探测到的细小障碍仍可能误清，需现场校准。
-
-默认 `obstacle_slowdown_enabled=false`，取消按障碍距离渐进减速的区间，
-安全命令按跟踪器原速度执行。`obstacle_slowdown_distance=0.20 m` 和
-`obstacle_min_speed_scale=0.20` 仅在手动开启距离减速后生效。
-底盘限幅、转弯、到点减速、最终碰撞检查和近距离急停仍生效。
-重规划期间沿用正常跟踪速度，不再设置独立的线速度和角速度上限。
-默认近距离急停圆 `dynamic_center_stop_radius=0.40 m`（上一版 `0.45 m`），
-半径从 `base_link` 原点计，只作用于前半平面；它不是车边间距。矩形车身、
-安全余量及制动检查继续生效，无可用路径时的停车不受该半径控制。
-旧的 `dynamic_stop_distance` 参数已移除，近处障碍不再跳过重规划；
-停车重试也不要求障碍中心发生移动。A* 起点被膨胀层占用时仍可能无路可走。
-RViz 红色球标出车身碰撞触发点的 XY 投影，日志同时记录 `obstacle_map_xy`。
-
-默认开启 `collision_speed_reduction_enabled`：候选轨迹未来碰撞时，依次尝试
-原候选速度的 75%、50%、25%，同步缩放线速度和角速度，采用第一个安全结果。
-每次都使用原实测速度检查当前运动的制动轨迹。当前车身已碰撞、实际运动无法
-安全刹停、输入无效或全部候选不安全时仍停车。
-
-`start_recovery_enabled=true` 时，A* 起点被保守膨胀区覆盖但矩形车身仍安全，
-可尝试沿当前朝向前行，最多 `start_recovery_max_distance=1.2 m`。必须整段扫掠、
-段末制动和当前实测运动制动均安全，且出口到目标有正常 A* 路径，才执行恢复。
-动态重规划等待期间不再仅因起点处于膨胀区而强制停车；开启继续跟踪选项、
-已有旧路径且车身检查开启时，继续通过实时碰撞检查发布跟踪命令。
-无旧路径、输入失效、规划失败或真实碰撞仍停车。
-恢复段速度统一使用启动参数 `max_vx`，按该速度检查全段扫掠和制动；
-不在出口前额外减速，接回跟踪器时从上一条已发布速度衔接。
-旧参数 `start_recovery_speed`、`dynamic_replan_slow_vx_limit`、
-`dynamic_replan_slow_wz_limit` 已移除，不再生效。恢复段保留原形状并显示在跟踪路径中，
-不做 shortcut/平滑；优先选择出口及 X/Y 各偏移 `0.10 m` 的九个位置均在膨胀区外
-的候选，没有时允许选择出口中心在膨胀区外、整段车身及制动检查通过的候选。
-`10 cm` 额外规划余量不再是硬性条件，日志 `buffered_exit=False` 标识该回退。
-执行命令仍实时检查，距出口不超过 `0.05 m` 时，用最新代价图和记忆复查当前位置
-到后续路径的连接、整条后续路径及实测运动制动；通过后同一周期直接接续跟踪，
-不再无条件停车重规划。接续暂未通过时，在实时碰撞检查允许的前提下走到出口，
-不再提前 `2 cm` 停车；抵达出口仍不能安全接续时才停车重规划。
-偏离短段超过 `0.08 m` 或朝向偏差超过 `0.25 rad` 时停车重规划。
-无安全前行出口时保持停车，不清除障碍、不忽略占用格、不自动倒车。
-
-点云超过 `dynamic_obstacle_timeout=0.5 s` 未有效更新、TF/记忆投影不可用、
-静态地图未收到、记忆满或预测碰撞时均禁止运动。该超时限制点云新鲜度，不限制
-记忆寿命。A* 默认等待 overlay 应用确认再规划，路径平滑也复查障碍记忆。
-
-需要清空误记忆时，在确认环境后执行：
-
-```bash
-cd /home/robot/Autocar_v1
-bash scripts/ros1.sh rosservice call /path_follower_node/clear_obstacle_memory "{}"
-```
-
-服务会取消当前目标并停车，之后等待新点云和新目标。仍存在的障碍重新被观测后会
-再次加入记忆。该机制不能发现从未看见的侧面障碍，也不估计移动障碍的未来位置。
-
-等待恢复规划或接续失败会停车，并记录 `Navigation stop: ...`；成功接续记录
-`Recovery handoff: ... continuing tracking`。控制周期超过 `0.3 s`
-会输出耗时告警，帮助区分碰撞停车和下游 `0.5 s` 速度输入看门狗停车。
-无路径或到点后持续发布零速度；不通过放宽看门狗或重发旧非零命令处理延迟。
-
-记忆与车身检查均不依赖 A*、PID。后续接入人工势场法时可复用这两层，将新的候选
-速度继续送入统一的碰撞检查。控制和障碍参数位于 `config/local_planner.yaml`；
-车身尺寸、安全余量、体素分辨率、碰撞采样间距和规划跟踪余量位于
-`fw_mid_common_utils/config/collision_geometry.yaml`，由 A* 和局部规划器共用。
-A* 膨胀和路径后处理计入这些误差，默认在 `0.05 m` 栅格上膨胀 `0.65 m`，
-使规划路径留出车身检查需要的距离。`dynamic_static_filter_radius=0` 仅过滤原
-静态占用格覆盖的点，墙边新增障碍也会进入 A* overlay。
-
-## 启动
-
-局部规划 launch 的 `max_vx`（m/s）、`max_wz`（deg/s）必须与底盘一致。完整导航入口会自动同步这两个参数；碰撞检查在限幅之后执行，预测与最终发送的命令保持一致。
-
-`max_vx` 同时作为 PID / Pure Pursuit 普通直线巡航速度。局部节点向控制器显式
-传入该值，覆盖旧的 `pid_max_vx` / `pp_max_vx`；不再用前视点间距乘 `k_v`
-限制巡航速度。前视点仍用于转向，启动加速、转弯、到点减速和碰撞保护保留。
-单独使用控制器库而不传 `cruise_speed` 时，仍兼容原来的比例速度计算。
-若碰撞预测把速度降低，日志 `Collision speed reduction` 记录原因、碰撞点及前后速度。
-
-整车通常使用 `fw_mid_bringup/navigation.launch`。单独调试时先启动 A*，再运行：
-
-```bash
-roslaunch fw_mid_local_planner local_planner.launch
-```
-
-完整导航和两个规划器 launch 均支持 `geometry_config:=/绝对路径/配置.yaml`。
-分开启动时必须加载同一份几何配置；它会覆盖局部配置中的同名参数。
-修改配置或代码后，先停车再重启导航生效，运行中的节点不会自动更新。
-
-如已有其他节点发布 `body -> base_link`，关闭本 launch 的重复发布：
-
-```bash
-roslaunch fw_mid_local_planner local_planner.launch \
-  publish_body_to_base_link_tf:=false
-```
+覆盖力/速度计算、障碍投影与记忆、碰撞检查和规划/恢复/发布接口。ROS 传输使用替身，仍需 Noetic 构建、ROS 联调及受控实车验证。

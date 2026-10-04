@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Executable entry point for the ROS1 FW-mid path follower."""
+"""供 catkin 安装和 rosrun/roslaunch 调用的经典导航入口。"""
 
 from fw_mid_local_planner.path_follower_node import main
 

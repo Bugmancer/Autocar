@@ -1,6 +1,6 @@
 <launch>
   <arg name="config_path" default="$(find fw_mid_fastlio2)/config/lio.yaml" />
-  <!-- Bundled livox_ros_driver2 reports acceleration in g. -->
+  <!-- 配套 Livox 驱动以 g 发布加速度；此私有参数会覆盖 YAML 的同名配置。 -->
   <arg name="imu_acc_scale" default="9.80665" />
 
   <group ns="fastlio2">

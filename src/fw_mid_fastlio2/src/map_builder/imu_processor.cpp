@@ -15,6 +15,7 @@ IMUProcessor::IMUProcessor(Config &config, std::shared_ptr<IESKF> kf) : m_config
 
 bool IMUProcessor::initialize(SyncPackage &package)
 {
+    // 初始化要求车辆静止：用样本均值估计陀螺零偏和重力方向，而非运动加速度。
     m_imu_cache.insert(m_imu_cache.end(), package.imus.begin(), package.imus.end());
     if (m_imu_cache.size() < static_cast<size_t>(m_config.imu_init_num))
         return false;
@@ -30,6 +31,7 @@ bool IMUProcessor::initialize(SyncPackage &package)
     m_kf->x().r_il = m_config.r_il;
     m_kf->x().t_il = m_config.t_il;
     m_kf->x().bg = gyro_mean;
+    // 开启重力对齐时旋转初始世界系，使重力朝负 Z；外参始终由配置给定。
     if (m_config.gravity_align)
     {
         m_kf->x().r_wi = (Eigen::Quaterniond::FromTwoVectors((-acc_mean).normalized(), V3D(0.0, 0.0, -1.0)).matrix());
@@ -50,12 +52,11 @@ bool IMUProcessor::initialize(SyncPackage &package)
 
 void IMUProcessor::undistort(SyncPackage &package)
 {
-
+    // 加入上一包最后一个 IMU 样本，避免跨扫描积分时丢失边界区间。
     m_imu_cache.clear();
     m_imu_cache.push_back(m_last_imu);
     m_imu_cache.insert(m_imu_cache.end(), package.imus.begin(), package.imus.end());
 
-    // const double imu_time_begin = m_imu_cache.front().time;
     const double imu_time_end = m_imu_cache.back().time;
 
     const double cloud_time_begin = package.cloud_start_time;
@@ -69,6 +70,7 @@ void IMUProcessor::undistort(SyncPackage &package)
     Input inp;
     inp.acc = m_imu_cache.back().acc;
     inp.gyro = m_imu_cache.back().gyro;
+    // 相邻 IMU 取中值积分；已预测过的部分跳过，并缓存各时刻的姿态与运动量。
     for (auto it_imu = m_imu_cache.begin(); it_imu < (m_imu_cache.end() - 1); it_imu++)
     {
         IMUData &head = *it_imu;
@@ -93,6 +95,7 @@ void IMUProcessor::undistort(SyncPackage &package)
         m_poses_cache.emplace_back(offset, m_last_acc, m_last_gyro, m_kf->x().v, m_kf->x().t_wi, m_kf->x().r_wi);
     }
 
+    // 用最后的惯性输入预测到扫描结束，使滤波状态与点云输出时间一致。
     dt = propagate_time_end - imu_time_end;
     m_kf->predict(inp, dt, m_Q);
     m_last_imu = m_imu_cache.back();
@@ -104,6 +107,7 @@ void IMUProcessor::undistort(SyncPackage &package)
     V3D cur_t_il = m_kf->x().t_il;
     auto it_pcl = package.cloud->points.end() - 1;
 
+    // 点云已按采样时间排序；从后向前查找积分区间并补偿到扫描末的雷达坐标系。
     for (auto it_kp = m_poses_cache.end() - 1; it_kp != m_poses_cache.begin(); it_kp--)
     {
         auto head = it_kp - 1;
@@ -121,6 +125,7 @@ void IMUProcessor::undistort(SyncPackage &package)
             V3D point(it_pcl->x, it_pcl->y, it_pcl->z);
             M3D point_rot = imu_r_wi * Sophus::SO3d::exp(imu_gyro * dt).matrix();
             V3D point_pos = imu_t_wi + imu_vel * dt + 0.5 * imu_acc * dt * dt;
+            // 依次经过采样时刻雷达、IMU、世界，再逆变换到扫描末 IMU 和雷达。
             V3D p_compensate = cur_r_il.transpose() * (cur_r_wi.transpose() * (point_rot * (cur_r_il * point + cur_t_il) + point_pos - cur_t_wi) - cur_t_il);
             it_pcl->x = p_compensate(0);
             it_pcl->y = p_compensate(1);

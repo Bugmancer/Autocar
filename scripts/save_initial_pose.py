@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Save a fresh localized map-to-body pose as this project's next startup seed."""
+"""保存新鲜且有效的地图到车体位姿，作为本项目下次启动的定位初值。"""
 
 import argparse
 import json
@@ -30,7 +30,7 @@ def pose_to_initial_pose(message):
     if norm < 1e-12 or not math.isfinite(norm):
         raise ValueError('Pose has an invalid quaternion')
     quaternion = [value / norm for value in quaternion]
-    # The Relocalize service composes Rz(yaw) * Rx(roll) * Ry(pitch).
+    # 与 Relocalize 服务一致，使用 Rz(yaw) * Rx(roll) * Ry(pitch) 分解姿态。
     yaw, roll, pitch = euler_from_quaternion(quaternion, axes='rzxy')
     return [round(value, 6) for value in xyz + [yaw, pitch, roll]]
 
@@ -59,9 +59,10 @@ class PoseCapture:
 
     def current(self, max_age):
         with self.lock:
-            # Require another status update after the possible latched message.
+            # 至少等待两次有效状态，避免仅凭订阅时收到的历史锁存消息保存初值。
             if self.pose is None or self.valid_count < 2:
                 return None
+            # 单调时钟检查接收是否停滞，ROS 时间另外检查位姿的实际采样时间。
             now = time.monotonic()
             if now - self.pose_received > max_age or now - self.valid_received > max_age:
                 return None
@@ -73,6 +74,7 @@ class PoseCapture:
 
 
 def save_seed(path, seed):
+    # 在目标目录写临时文件并同步，再原子替换，避免中途退出留下半份初值。
     path = Path(path).expanduser().resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(seed, separators=(',', ':'), allow_nan=False)
@@ -113,6 +115,7 @@ def main():
               'wait for /localizer/localization_valid=true; keep the vehicle stationary.'
               % args.timeout)
     deadline = time.monotonic() + args.timeout
+    # 独立墙钟定时器限制等待时间，ROS 仿真时间暂停时也能终止捕获。
     timer = threading.Timer(args.timeout, lambda: rospy.signal_shutdown(reason))
     timer.daemon = True
     timer.start()

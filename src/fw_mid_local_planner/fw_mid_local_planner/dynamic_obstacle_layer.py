@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live 3D obstacle observations and session-only memory, independent of A*."""
+"""独立于 A* 的实时三维障碍观测与会话级障碍记忆。"""
 
 import math
 import threading
@@ -30,7 +30,7 @@ class DynamicObstacleLayer:
         self.global_frame = self._normalise_frame(global_frame)
         self.enabled = bool(rospy.get_param("~enable_dynamic_obstacles", False))
         self.cloud_topic = str(rospy.get_param("~dynamic_cloud_topic", "/fastlio2/body_cloud"))
-        # FAST-LIO's frame named lidar is its continuous local world, not the sensor.
+        # FAST-LIO 中名为 lidar 的坐标系是连续局部世界坐标系，不是雷达本体坐标系。
         self.memory_frame = self._normalise_frame(rospy.get_param("~dynamic_memory_frame", "lidar"))
         self.timeout = float(rospy.get_param("~dynamic_obstacle_timeout", 0.5))
         self.x_min = float(rospy.get_param("~dynamic_x_min", -1.5))
@@ -46,6 +46,7 @@ class DynamicObstacleLayer:
         self.max_range = float(rospy.get_param("~dynamic_max_range", 8.0))
         self.sensor_origin = np.asarray(rospy.get_param(
             "~dynamic_sensor_origin", [-0.011, -0.02329, 0.04412]), dtype=float)
+        # sensor_origin 必须用输入点云坐标系表达；后续量程过滤与清空射线共用它。
         self.front = float(rospy.get_param("~footprint_front", 0.34))
         self.rear = float(rospy.get_param("~footprint_rear", 0.34))
         self.half_width = float(rospy.get_param("~footprint_half_width", 0.275))
@@ -85,6 +86,7 @@ class DynamicObstacleLayer:
             raise ValueError("Obstacle support count must be between 2 and dynamic_max_points")
 
         self._lock = threading.RLock()
+        # 清空代数用于拒绝旧会话中尚未完成的 TF 查询、点云计算和可视化结果。
         self._clear_generation = 0
         self.local_points = []
         self.map_points = []
@@ -138,7 +140,7 @@ class DynamicObstacleLayer:
 
     def cloud_cb(self, message):
         started = time.monotonic()
-        # 只接收时间窗内的新扫描；时间倒退会锁存输入错误，等待人工清空会话。
+        # 只接收时间窗内的新扫描；超过 0.5 秒的回跳锁存错误，小幅回跳重建记忆。
         frame = self._normalise_frame(message.header.frame_id)
         stamp = message.header.stamp
         age = (rospy.Time.now() - stamp).to_sec()
@@ -148,7 +150,7 @@ class DynamicObstacleLayer:
             generation = self._clear_generation
             if stamp < self._last_processed_stamp:
                 time_jump = (self._last_processed_stamp - stamp).to_sec()
-                if time_jump > 0.5:  # 超过0.5秒认为是严重问题
+                if time_jump > 0.5:  # 较大的时间回跳需要人工清空会话后恢复。
                     self.input_error = ("Point cloud clock jumped backwards %.2f s; "
                                        "clear memory to recover" % time_jump)
                     rospy.logerr_throttle(2.0, self.input_error)
@@ -187,15 +189,13 @@ class DynamicObstacleLayer:
                         & (robot_points[:, 2] >= self.z_min) & (robot_points[:, 2] <= self.z_max))
             if self.ground_filter_enabled:
                 obstacle &= robot_points[:, 2] > self.ground_z_max
-            # Crop before bounding obstacle work, so distant floor returns
-            # cannot consume the sampling budget for nearby obstacles.
+            # 先裁剪再限制障碍数量，避免远处地面回波耗尽近场障碍的采样预算。
             hits = memory_points[obstacle]
             if len(hits) > self.max_points:
                 hits = hits[np.linspace(0, len(hits) - 1, self.max_points, dtype=int)]
-            # Filter new occupancy only. All actual returns still bound clearing rays.
+            # 支持点过滤只作用于新增占用；所有真实回波仍用于限制清空射线。
             hits = supported_obstacle_points(hits, self.support_radius, self.support_min_points)
-            # Outside endpoints never mark obstacles, but their real rays can
-            # still prove that a previously observed obstacle has disappeared.
+            # 观察窗口外的端点不写入占用，但真实射线仍能证明旧障碍已消失。
             rays = memory_points
             if len(rays) > self.max_clear_rays:
                 rays = rays[np.linspace(0, len(rays) - 1, self.max_clear_rays, dtype=int)]
@@ -232,7 +232,7 @@ class DynamicObstacleLayer:
             return fresh
 
     def stale_age(self):
-        """Age of the newest valid cloud, or infinity before first reception."""
+        """返回最新有效点云的最大时间年龄；尚未接收或安全状态无效时返回无穷大。"""
         with self._lock:
             if (self.last_update_time is None or self.last_received is None
                     or self.input_error or self.memory.overflowed
@@ -243,20 +243,22 @@ class DynamicObstacleLayer:
             return max(receipt_age, scan_age)
 
     def point_snapshot(self):
+        """原子返回同一批障碍的机器人坐标点与地图坐标点，均为米制 ``(x, y)``。"""
         with self._lock:
             return list(self.local_points), list(self.map_points)
 
     def timed_point_snapshot(self):
-        """Return map-frame points with their last occupied observation time.
+        """返回地图坐标的 ``(x, y, stamp)``，时间为最近占用观测的 ROS 秒数。
 
-        This is an additional APF view; the ordinary snapshot continues to
-        include every remembered obstacle for collision checking and A*.
+        此视图供 APF 调整记忆障碍的斥力权重；普通快照仍包含全部记忆障碍，
+        碰撞检查与 A* 不会因障碍变旧而忽略它。
         """
         with self._lock:
             return [(x, y, stamp) for (x, y), stamp
                     in zip(self.map_points, self.point_stamps)]
 
     def update_map_points(self, robot_pose=None):
+        """用最新 TF 投影固定坐标中的记忆；转换失败时令安全联锁拒绝运动。"""
         if not self.enabled:
             return
         with self._lock:
@@ -266,6 +268,7 @@ class DynamicObstacleLayer:
             to_map = self.lookup(self.global_frame, self.memory_frame, rospy.Time(0))
             to_robot = self.lookup(self.robot_frame, self.memory_frame, rospy.Time(0))
             points = np.asarray([row[:3] for row in snapshot], dtype=float).reshape((-1, 3))
+            # 保留相同索引顺序，保证局部点、地图点和占用时间一一对应。
             mapped = self.transform_points(points, to_map)
             local = self.transform_points(points, to_robot)
             with self._lock:
@@ -285,7 +288,7 @@ class DynamicObstacleLayer:
 
     def clear(self):
         with self._lock:
-            # Work already doing TF or point processing belongs to the old session.
+            # 已进入 TF 查询或点云处理的旧任务不得把数据重新写入新会话。
             self._clear_generation += 1
             self.memory.clear()
             self.local_points = []
@@ -299,6 +302,7 @@ class DynamicObstacleLayer:
         self.publish_markers(force=True)
 
     def publish_markers(self, force=False):
+        # 颜色只反映最近观测年龄，不参与碰撞判定；旧障碍仍保留在记忆中。
         with self._lock:
             if not force and time.monotonic() - self._last_marker_wall < 0.2:
                 return
@@ -359,7 +363,7 @@ class DynamicObstacleLayer:
         return marker
 
     def should_emergency_stop(self):
-        """检查机器人前方紧急包络；数据不新鲜时由控制器执行停机策略。"""
+        """仅在数据新鲜时检查前方紧急包络；过期时返回假，由调用方决定停机或降级。"""
         if not self.enabled or not self.use_emergency_stop or not self.is_fresh():
             return False
         points, _ = self.point_snapshot()

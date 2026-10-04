@@ -1,4 +1,4 @@
-# PCD map and an initial map-to-body pose estimate.
+# PCD 地图及 body 在 map 中的初始位姿，平移单位米，欧拉角单位弧度。
 string pcd_path
 float32 x
 float32 y
@@ -7,7 +7,6 @@ float32 yaw
 float32 pitch
 float32 roll
 ---
-# True means that the map and initial estimate were accepted. Use IsValid to
-# determine whether ICP has subsequently converged.
+# true 仅表示地图和初值已接受；是否完成配准及当前仍有效，需查询 IsValid。
 bool success
 string message

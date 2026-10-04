@@ -1,4 +1,5 @@
 <launch>
+  <!-- 关闭 start_can 时仍运行命令适配器，可在不连接底盘的环境检查输出。 -->
   <arg name="start_can" default="true" />
   <arg name="can_interface" default="can0" />
   <arg name="max_vx" default="0.30" />

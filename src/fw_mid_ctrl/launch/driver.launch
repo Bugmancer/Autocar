@@ -1,15 +1,15 @@
 <launch>
-  <!-- CAN interface on vehicle computer -->
+  <!-- 车载计算机的 CAN 接口。 -->
   <arg name="can_interface" default="can0"/>
 
-  <!-- Safety limits for first-stage vehicle tests -->
+  <!-- 初期实车测试的限速与指令超时设置；角速度单位为度/秒。 -->
   <arg name="max_vx" default="0.30"/>
   <arg name="max_vy" default="0.00"/>
   <arg name="max_wz" default="30.0"/>
   <arg name="cmd_timeout" default="0.5"/>
   <arg name="send_rate" default="20.0"/>
 
-  <!-- JSON-only chassis entry point. Navigation uses navigation_driver.launch. -->
+  <!-- 底盘 JSON 指令入口；导航场景由 navigation_driver.launch 一并启动 Twist 适配。 -->
   <node pkg="fw_mid_ctrl"
         type="can_driver_node.py"
         name="fw_mid_can_driver"

@@ -21,7 +21,7 @@
     <param name="max_forbidden_height_m" value="2.0" />
     <param name="enable_dynamic_overlay" value="$(arg enable_dynamic_overlay)" />
     <param name="dynamic_obstacle_topic" value="$(arg dynamic_obstacle_topic)" />
-    <!-- Session memory is replaced explicitly, never expired out of blind spots. -->
+    <!-- 导航会话内的障碍记忆只由新快照显式替换，不因进入视野盲区而过期。 -->
     <param name="dynamic_overlay_timeout" value="0.0" />
   </node>
 </launch>

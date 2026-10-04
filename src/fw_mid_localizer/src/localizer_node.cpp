@@ -61,7 +61,7 @@ bool finitePoseRequest(const fw_mid_localizer::Relocalize::Request &request)
            std::isfinite(request.pitch) && std::isfinite(request.roll);
 }
 
-}  // namespace
+}  // 匿名命名空间
 
 struct NodeConfig
 {
@@ -197,8 +197,7 @@ private:
                                      "': " + error.what());
         }
 
-        // These private parameters allow launch-time overrides without changing
-        // the project-owned YAML file.
+        // 私有参数覆盖 YAML，允许 launch 单独调整话题、坐标系和时效门限。
         pnh_.param("cloud_topic", config_.cloud_topic, config_.cloud_topic);
         pnh_.param("odom_topic", config_.odom_topic, config_.odom_topic);
         pnh_.param("map_frame", config_.map_frame, config_.map_frame);
@@ -262,6 +261,7 @@ private:
             ROS_WARN_THROTTLE(2.0, "discarding input: cloud must be in the odometry child frame, with distinct map/local/body frames");
             return;
         }
+        // 既限制两路采样时间差，也限制点云相对 ROS 时钟的年龄及允许的未来偏差。
         if (cloud_message->header.stamp.isZero() || odom_message->header.stamp.isZero() ||
             std::abs((cloud_message->header.stamp - odom_message->header.stamp).toSec()) > config_.max_sync_dt ||
             (ros::Time::now() - cloud_message->header.stamp).toSec() > config_.input_timeout ||
@@ -368,6 +368,7 @@ private:
             }
         }
 
+        // TF/位姿随输入更新，昂贵的 ICP 另按墙钟限频；同一扫描最多尝试一次。
         const ros::WallTime now = ros::WallTime::now();
         if ((now - last_update_time_).toSec() < (1.0 / config_.update_hz))
         {
@@ -414,7 +415,8 @@ private:
             last_attempt_stamp_ = message_time;
         }
 
-        // ICP 计算使用同一个点云/里程计快照，计算期间不占用 ROS 输入状态锁。
+        // ICP 使用同一份点云/里程计快照，计算期间释放状态锁。
+        // 当前仍是单线程回调，耗时配准会同时延迟输入回调与状态心跳。
         bool converged = false;
         double rough_score = 0.0;
         double refine_score = 0.0;
@@ -450,7 +452,7 @@ private:
         bool result_is_current = false;
         {
             std::lock_guard<std::mutex> lock(state_.mutex);
-            // 重定位请求可在 ICP 运算期间更新；旧请求的结果不能覆盖新初值。
+            // 请求编号用于识别结果所属初值；仅编号仍一致时才接受配准结果。
             if (request_id == state_.request_id)
             {
                 state_.map_local_rotation = new_map_local_rotation;
@@ -524,7 +526,7 @@ private:
         const Eigen::AngleAxisd roll_angle(request.roll, Eigen::Vector3d::UnitX());
         const Eigen::AngleAxisd pitch_angle(request.pitch, Eigen::Vector3d::UnitY());
         M4F initial_guess = M4F::Identity();
-        // Preserve the source project's yaw-roll-pitch composition convention.
+        // 保留源项目的偏航、横滚、俯仰旋转组合顺序，保存初值时也必须使用此约定。
         initial_guess.block<3, 3>(0, 0) =
             (yaw_angle * roll_angle * pitch_angle).toRotationMatrix().cast<float>();
         initial_guess.block<3, 1>(0, 3) = V3F(request.x, request.y, request.z);
@@ -566,6 +568,7 @@ private:
 
     bool inputFreshLocked() const
     {
+        // 墙钟检查接收中断，ROS 时间检查采样过期；调用者必须已持有状态锁。
         const double stamp_age = (ros::Time::now() - state_.last_message_time).toSec();
         return state_.message_received &&
                (ros::WallTime::now() - state_.last_received).toSec() <= config_.input_timeout &&
@@ -708,6 +711,7 @@ int main(int argc, char **argv)
     try
     {
         LocalizerNode node;
+        // 所有订阅、服务和定时器串行执行；切换多线程前须审查 ICP/地图替换的时序。
         ros::spin();
     }
     catch (const std::exception &error)

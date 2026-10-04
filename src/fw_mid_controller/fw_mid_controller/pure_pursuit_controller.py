@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pure-pursuit tracker for the FW-mid ROS1 local planner."""
+"""供 FW-mid ROS1 局部规划器使用的纯追踪控制器。"""
 
 import math
 from typing import Sequence
@@ -34,6 +34,7 @@ class PurePursuitController:
         self.reset()
 
     def reset(self) -> None:
+        # 换路径或结束跟踪后清空限速历史，下次从静止状态重新生成候选指令。
         self.prev_cmd = (0.0, 0.0)
 
     @staticmethod
@@ -66,6 +67,7 @@ class PurePursuitController:
         goal_dist = math.hypot(float(goal.x) - rx, float(goal.y) - ry)
 
         vx = clamp(self.k_v * max(0.0, x_body), 0.0, self.max_vx)
+        # 显式巡航速度覆盖按纵向误差计算的速度，再应用终点和曲率减速。
         if self.cruise_speed is not None:
             vx = self.cruise_speed if x_body > 0 else 0.0
         if goal_dist < self.approach_dist:
@@ -92,5 +94,6 @@ class PurePursuitController:
             vx = 0.0
         if abs(wz) < self.deadband_wz:
             wz = 0.0
+        # 保留实际返回的输出，作为下一周期变化率限制的基准。
         self.prev_cmd = (vx, wz)
         return vx, 0.0, wz

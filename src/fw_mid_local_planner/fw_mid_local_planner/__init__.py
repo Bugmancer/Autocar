@@ -1,4 +1,4 @@
-"""ROS1 local-navigation components for the FW-mid vehicle."""
+"""FW-mid 车辆的 ROS1 局部导航组件。"""
 
 from .path_processing import PathPoint, process_path
 

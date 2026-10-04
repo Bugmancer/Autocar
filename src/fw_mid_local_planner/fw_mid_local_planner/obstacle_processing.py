@@ -1,4 +1,4 @@
-"""ROS-independent dynamic-obstacle filtering helpers."""
+"""与 ROS 解耦的动态障碍过滤辅助函数，点坐标与距离均使用米。"""
 
 import math
 from itertools import product
@@ -10,7 +10,7 @@ TimedPoint2D = Tuple[float, float, float]
 
 
 def supported_obstacle_points(points, radius, min_points):
-    """Keep points with enough distinct same-scan returns in a 3D neighborhood."""
+    """保留同帧三维邻域中具有足够不同回波点支持的点，计数包含点自身。"""
     # 通过同帧邻域支持数抑制孤立噪点；只有保留下来的命中才会进入记忆。
     if not math.isfinite(radius) or radius <= 0 or min_points < 2:
         raise ValueError("Obstacle support requires positive radius and at least two points")
@@ -42,12 +42,12 @@ def supported_obstacle_points(points, radius, min_points):
 
 def proximity_speed_scale(points, front, rear, half_width, margin,
                           obstacle_radius, slowdown_distance, minimum_scale):
-    """Scale both motion axes by clearance to the padded vehicle rectangle.
+    """按障碍到带边距车体矩形的净距，同步缩放线速度和角速度。
 
-    This comfort limiter never authorizes motion: the swept collision check
-    still decides whether the scaled command and current motion are safe.
+    此函数仅提供舒适性减速；缩放后的指令与当前实测运动是否安全，仍由后续
+    车体扫掠碰撞及制动检查决定，净距为零也不能凭此函数直接放行。
     """
-    # 这是舒适减速器，不替代后续的完整扫掠碰撞与制动检查。
+    # 无障碍时保持原速度；任何非有限坐标都返回零缩放系数。
     clearance = float("inf")
     for x, y in points:
         if not math.isfinite(x) or not math.isfinite(y):
@@ -109,6 +109,7 @@ def select_front_obstacles(
 def deduplicate_timed_points(
     history: Iterable[TimedPoint2D], resolution: float, limit: int
 ) -> List[Point2D]:
+    """对按时间排序的 ``(stamp, x, y)`` 历史按网格去重，优先保留较新点。"""
     resolution = max(0.02, float(resolution))
     limit = max(1, int(limit))
     seen = set()

@@ -13,6 +13,7 @@ M3D JrInv(const V3D &inp)
 
 void State::operator+=(const V21D &delta)
 {
+    // 姿态使用右乘小角度扰动，位置/速度/零偏使用普通加法；雅可比须遵循此约定。
     r_wi *= Sophus::SO3d::exp(delta.segment<3>(0)).matrix();
     t_wi += delta.segment<3>(3);
     r_il *= Sophus::SO3d::exp(delta.segment<3>(6)).matrix();
@@ -53,6 +54,7 @@ std::ostream &operator<<(std::ostream &os, const State &state)
 
 void IESKF::predict(const Input &inp, double dt, const M12D &Q)
 {
+    // 去除传感器零偏后传播名义状态，并用 F/G 将状态误差和过程噪声传播到协方差。
     V21D delta = V21D::Zero();
     delta.segment<3>(0) = (inp.gyro - m_x.bg) * dt;
     delta.segment<3>(3) = m_x.v * dt;
@@ -77,6 +79,7 @@ void IESKF::predict(const Input &inp, double dt, const M12D &Q)
 
 void IESKF::update()
 {
+    // 每轮重新匹配点面残差，与同一份 IMU 预测先验合并，避免多次重复使用先验。
     State predict_x = m_x;
     SharedState shared_data;
     shared_data.iter_num = 0;
@@ -100,6 +103,7 @@ void IESKF::update()
         M21D J = M21D::Identity();
         J.block<3, 3>(0, 0) = JrInv(delta.segment<3>(0));
         J.block<3, 3>(6, 6) = JrInv(delta.segment<3>(6));
+        // 将先验协方差搬到当前姿态切空间，再叠加前 12 维的几何信息矩阵。
         H += J.transpose() * m_P.inverse() * J;
         b += J.transpose() * m_P.inverse() * delta;
 
@@ -119,8 +123,7 @@ void IESKF::update()
         return;
 
     M21D L = M21D::Identity();
-    // L.block<3, 3>(0, 0) = JrInv(delta.segment<3>(0));
-    // L.block<3, 3>(6, 6) = JrInv(delta.segment<3>(6));
+    // 最后一次增量更新后，协方差也要转到更新后姿态对应的切空间。
     L.block<3, 3>(0, 0) = Jr(delta.segment<3>(0));
     L.block<3, 3>(6, 6) = Jr(delta.segment<3>(6));
     m_P = L * H.inverse() * L.transpose();

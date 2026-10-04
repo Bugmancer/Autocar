@@ -1,6 +1,5 @@
-# Reserved for compatibility with the ROS2 interface. The current status is
-# returned for every code value.
+# 为兼容 ROS2 接口保留；任何 code 值都返回当前定位状态。
 int32 code
 ---
-# True only after the most recent relocalization request has converged.
+# 最近重定位请求已收敛，且输入与最近成功配准均未超时，才返回 true。
 bool valid

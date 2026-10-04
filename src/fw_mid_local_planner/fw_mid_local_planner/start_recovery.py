@@ -1,4 +1,4 @@
-"""Bounded forward recovery from conservative costmap inflation, not obstacles."""
+"""在有限距离内直行退出保守的代价地图膨胀区，始终检查真实障碍。"""
 
 import copy
 import math
@@ -9,7 +9,7 @@ from .path_processing import PathPoint
 
 @dataclass(frozen=True)
 class StartRecovery:
-    """在起点落入膨胀区时保存一段已经验证过的直行前缀。"""
+    """保存起点落入膨胀区时已验证的直行前缀，位置单位为米、速度为米每秒。"""
     start: tuple
     distance: float
     speed: float
@@ -23,10 +23,10 @@ class StartRecovery:
 
 def forward_exit(start, checker, obstacles, occupied, is_inflated,
                  current_velocity, max_distance=1.2, *, speed, diagnostics=None):
-    """Check the entire forward sweep and braking before proposing an exit.
+    """检查完整前进扫掠及制动轨迹后，才返回可尝试的出口。
 
-    No cells are cleared. Unknown/static occupied space remains blocked, and
-    callers must obtain a normal global route from the exit before executing.
+    不清除任何栅格，未知区域和静态占用区仍由原始栅格查询拦截；执行前，
+    调用方必须先取得从出口通往目标的正常全局路径。
     """
     # 该策略只离开保守膨胀区，不清除障碍、不跳过原始栅格和动态障碍检查。
     if diagnostics is None:
@@ -38,6 +38,7 @@ def forward_exit(start, checker, obstacles, occupied, is_inflated,
         return None
     stationary = checker.check(start, 0, 0, obstacles,
                                current_velocity=current_velocity, occupied=occupied)
+    # 先验证当前位置及实测速度的停车过程，再搜索向前出口。
     if not stationary.safe:
         diagnostics.update(reason=stationary.reason, collision_point=stationary.collision_point)
         return None
@@ -54,10 +55,11 @@ def forward_exit(start, checker, obstacles, occupied, is_inflated,
         (buffered if has_buffer else unbuffered).append((distance, has_buffer))
     diagnostics.update(reason='no free exit center within search distance',
                        free_exits=len(buffered) + len(unbuffered), buffered_exits=len(buffered))
-    # The 10 cm planning buffer is a preference, not a physical collision
-    # boundary. Every fallback still gets the full swept and braking checks.
+    # 优先选取周围 10 厘米均脱离膨胀区的出口；无此缓冲的备选出口
+    # 仍须通过完整扫掠与制动检查，这个偏好不替代物理碰撞边界。
     for distance, has_buffer in buffered + unbuffered:
         sweep = copy.copy(checker)
+        # 只改变本次恢复检查的预测时长；碰撞器仍会在前进段后追加制动段。
         sweep.prediction_time = distance / speed
         result = sweep.check(start, speed, 0, obstacles,
                              current_velocity=current_velocity, occupied=occupied)

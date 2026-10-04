@@ -4,6 +4,7 @@
 #include <pcl/point_cloud.h>
 
 using PointType = pcl::PointXYZINormal;
+// 点的 curvature 保存扫描内毫秒偏移；不表示几何曲率。
 using CloudType = pcl::PointCloud<PointType>;
 using PointVec = std::vector<PointType, Eigen::aligned_allocator<PointType>>;
 
@@ -29,6 +30,7 @@ float sq_dist(const PointType &p1, const PointType &p2);
 
 struct Config
 {
+    // 点云距离和体素尺寸均为米；噪声分别对应加计、陀螺及各自零偏。
     int lidar_filter_num = 3;
     double lidar_min_range = 0.5;
     double lidar_max_range = 20.0;
@@ -66,6 +68,7 @@ struct IMUData
 
 struct Pose
 {
+    // 去畸变缓存：offset 为扫描起点后的秒数，位姿/速度/加速度位于世界系。
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     double offset;
     V3D acc;
@@ -79,6 +82,7 @@ struct Pose
 
 struct SyncPackage
 {
+    // 扫描开始/结束为绝对秒；收集不晚于扫描末的 IMU，点云稍后原地去畸变。
     Vec<IMUData> imus;
     CloudType::Ptr cloud;
     double cloud_start_time = 0.0;

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Path post-processing shared by the local planner and offline tests."""
+"""局部规划器与离线测试共用的路径后处理；位置单位为米，航向单位为弧度。"""
 
 import math
 from dataclasses import dataclass
@@ -12,6 +12,7 @@ CollisionChecker = Callable[[float, float], bool]
 
 @dataclass
 class PathPoint:
+    """同一全局坐标系中的平面路径点及切向航向。"""
     x: float
     y: float
     yaw: float = 0.0
@@ -38,7 +39,7 @@ def segment_collision_free(
     is_occupied: Optional[CollisionChecker],
     step: float,
 ) -> bool:
-    """沿线离散采样；任何采样点占用都否决整段捷径。"""
+    """沿线含首尾离散采样，任一点占用即否决线段；不提供车体扫掠保证。"""
     if is_occupied is None:
         return True
 
@@ -58,6 +59,7 @@ def path_collision_free(
     is_occupied: Optional[CollisionChecker],
     step: float,
 ) -> bool:
+    """逐段调用点占用检查；调用方负责提供与路径坐标系一致的占用查询。"""
     if is_occupied is None:
         return True
     return all(
@@ -95,13 +97,14 @@ def shortcut_path(
 
 
 def resample_path(points: Sequence[Point2D], spacing: float) -> List[Point2D]:
-    """按弧长重采样，使控制器收到稳定间距的路径点。"""
+    """按折线弧长等间距重采样并保留首尾点；输入拐点不保证保留。"""
     if len(points) <= 1:
         return list(points)
 
     spacing = max(float(spacing), 1e-3)
     result = [points[0]]
     remaining = spacing
+    # remaining 跨线段保留到下一个采样点的剩余弧长，避免每段重新计距。
     segment_start = points[0]
 
     for segment_end in points[1:]:
@@ -208,7 +211,11 @@ def process_path(
     collision_check_step: float,
     is_occupied: Optional[CollisionChecker],
 ) -> List[PathPoint]:
-    """按捷径、重采样、碰撞约束平滑的顺序处理全局路径。"""
+    """按捷径、重采样、碰撞约束平滑处理全局路径，再计算切向航向。
+
+    这里的碰撞查询只约束几何路径点；末次重采样后没有整条路径复核，不能据此
+    保证返回折线无碰撞。实际执行仍必须通过运行时的车体碰撞检查。
+    """
     points = [(float(x), float(y)) for x, y in raw_points]
     if len(points) <= 1:
         return compute_center_diff_yaw(points)

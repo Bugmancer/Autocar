@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""ROS1 A* global planner with a dynamic obstacle overlay.
+"""支持动态障碍叠加的 ROS1 A* 全局规划器。
 
-This node is a rospy port of the FW-mid ROS2 ``global_planner`` node.  The
-algorithm and private interface names are intentionally kept compatible so a
-ROS1 local planner can call ``/astar_planner_node/get_plan`` without an
-additional bridge.
+由 FW-mid ROS2 的 ``global_planner`` 移植而来，保留算法和私有接口名称，
+使 ROS1 局部规划器可直接调用 ``/astar_planner_node/get_plan`` 服务。
 """
 
 import heapq
@@ -25,7 +23,7 @@ from fw_mid_common_utils.collision_geometry import CollisionGeometry
 
 
 class AStarPlanner:
-    """Load a static map and expose A* planning through a ROS1 service.
+    """加载静态地图，通过 ROS1 服务提供 A* 路径规划。
 
     ``map_frame`` 是唯一允许的输入/输出坐标系：服务请求先从世界坐标
     映射到栅格索引，搜索完成后再转换回同一 ``map`` 坐标系。代价地图会
@@ -87,6 +85,7 @@ class AStarPlanner:
         self.forbidden_rects = []
         self.dynamic_points_map = []
         self.last_dynamic_overlay_time = None
+        # 更新回调会嵌套调用构图和过期检查，因此必须使用可重入锁。
         self._dynamic_lock = threading.RLock()
 
         self.grid_map = None
@@ -98,7 +97,7 @@ class AStarPlanner:
         self.width = 0
         self.height = 0
 
-        # Match the ROS2 node: fail startup when the configured map is invalid.
+        # 地图无效时直接中止启动，避免节点以缺少碰撞约束的状态提供服务。
         self.load_and_process_map(self.map_yaml_path)
 
         self.plan_srv = rospy.Service("~get_plan", GetPlan, self.plan_cb)
@@ -122,10 +121,11 @@ class AStarPlanner:
         return frame or "map"
 
     # ------------------------------------------------------------------
-    # Map loading and costmap construction
+    # 地图加载与代价地图构建
     # ------------------------------------------------------------------
 
     def load_and_process_map(self, yaml_path):
+        """按地图 YAML 的占用阈值分类像素，再建立包含车体余量的静态地图。"""
         if not yaml_path:
             raise RuntimeError("~map_yaml_path is empty")
         if not os.path.isfile(yaml_path):
@@ -160,7 +160,7 @@ class AStarPlanner:
         if image is None:
             raise RuntimeError("Failed to read map image: {}".format(image_path))
 
-        # OccupancyGrid and the source planner use a bottom-left grid origin.
+        # 图像原点在左上，OccupancyGrid 原点在左下；先翻转再解释栅格行号。
         image = cv2.flip(image, 0)
         self.height, self.width = image.shape
         image_probability = image.astype(np.float32) / 255.0
@@ -175,8 +175,7 @@ class AStarPlanner:
         self.occupancy_map[occupied] = 100
         self.occupancy_map[unknown] = -1
 
-        # Unknown space is blocked by default. It may be exposed only through
-        # an explicit parameter for maps that were intentionally cropped.
+        # 未知栅格默认视为障碍；只有显式允许未知区域时才将其加入可行驶区。
         self.grid_map = np.zeros_like(image, dtype=np.uint8)
         self.grid_map[occupied] = 100
         if not self.allow_unknown:
@@ -188,6 +187,7 @@ class AStarPlanner:
         self.static_inflation_radius = self.geometry.planning_radius(self.resolution)
         self.dynamic_inflation_radius = self.geometry.planning_radius(self.resolution, dynamic=True)
         kernel = self.inflation_kernel(self.static_inflation_radius, self.resolution)
+        # 地图外侧也按障碍处理，防止只检查车体中心而让车身越出已知地图。
         self.static_costmap = cv2.dilate(self.grid_map, kernel,
             borderType=cv2.BORDER_CONSTANT, borderValue=100)
         self.current_costmap = self.static_costmap.copy()
@@ -196,10 +196,11 @@ class AStarPlanner:
     def inflation_kernel(radius, resolution):
         cells = int(math.ceil(radius / resolution))
         y, x = np.ogrid[-cells:cells+1, -cells:cells+1]
-        # Round only the array extent; geometry already includes cell uncertainty.
+        # 仅对核的数组范围向上取整；半径已包含栅格误差，无需再整格扩大圆盘。
         return (x*x + y*y <= (radius / resolution)**2 + 1e-12).astype(np.uint8)
 
     def _find_forbidden_zones(self):
+        """按连通轮廓面积和米制尺寸筛选禁止通行的障碍簇矩形。"""
         kernel = cv2.getStructuringElement(
             cv2.MORPH_RECT,
             (max(1, self.cluster_px), max(1, self.cluster_px)),
@@ -236,10 +237,11 @@ class AStarPlanner:
             )
 
     # ------------------------------------------------------------------
-    # Dynamic obstacle overlay
+    # 动态障碍快照叠加
     # ------------------------------------------------------------------
 
     def dynamic_points_cb(self, msg):
+        """以整帧点集替换旧快照；消息必须已经变换到地图坐标系。"""
         frame = self._normalise_frame(msg.header.frame_id)
         if frame != self.map_frame:
             rospy.logwarn_throttle(
@@ -261,8 +263,7 @@ class AStarPlanner:
             self.current_costmap = self.build_working_costmap()
             costmap = self._create_grid_msg(self.current_costmap)
 
-        # The acknowledgment follows applying the complete snapshot. Local
-        # planning waits for it instead of guessing delivery time with a sleep.
+        # 整帧快照应用完成后才回传原始时间戳，供局部规划器确认重规划前置条件。
         self.costmap_pub.publish(costmap)
         self.overlay_stamp_pub.publish(TimeMessage(data=msg.header.stamp))
 
@@ -275,6 +276,7 @@ class AStarPlanner:
             rospy.loginfo_throttle(1.0, "Dynamic obstacle overlay cleared.")
 
     def expire_dynamic_overlay_if_needed(self):
+        # timeout <= 0 表示仅由新快照显式清除，视野外的历史障碍不会自动消失。
         with self._dynamic_lock:
             if not self.dynamic_points_map:
                 return
@@ -298,7 +300,7 @@ class AStarPlanner:
             )
 
     def build_working_costmap(self):
-        """Return a fresh static costmap with current dynamic points added."""
+        """复制静态代价地图并叠加当前障碍快照，返回本次请求独享的数组。"""
         if self.static_costmap is None:
             return None
 
@@ -308,6 +310,7 @@ class AStarPlanner:
             return working
 
         with self._dynamic_lock:
+            # 仅在锁内复制点集，膨胀运算使用副本，避免搜索中途改变障碍集合。
             points = list(self.dynamic_points_map)
         if not points:
             return working
@@ -322,7 +325,7 @@ class AStarPlanner:
         return np.maximum(working, cv2.dilate(seeds, kernel))
 
     # ------------------------------------------------------------------
-    # ROS service and A* implementation
+    # ROS 规划服务与 A* 搜索
     # ------------------------------------------------------------------
 
     def plan_cb(self, request):
@@ -364,7 +367,8 @@ class AStarPlanner:
         if costmap is None:
             rospy.logwarn("A* costmap is not ready")
             return response
-        self.current_costmap = costmap
+        # 并发的障碍回调可能已发布更新的地图；本请求只使用私有快照，
+        # 不把搜索开始时的旧地图写回 current_costmap。
 
         for label, grid, x, y in (
             ("start", start_grid, start_x, start_y),
@@ -389,8 +393,8 @@ class AStarPlanner:
         path_msg.header.frame_id = self.map_frame
         path_msg.header.stamp = rospy.Time.now()
 
-        # Keep obstacle corners; the follower shortcuts only after checking the
-        # whole segment. Blind four-cell downsampling could cut into inflation.
+        # 保留所有栅格拐点；后续跟踪器只在整段碰撞检查通过后才允许跨点，
+        # 防止按固定间隔下采样直接切入已膨胀的障碍物。
         for grid_x, grid_y in path_grid:
             pose = PoseStamped()
             pose.header = path_msg.header
@@ -450,8 +454,7 @@ class AStarPlanner:
                 if self._cell_blocked(neighbor, costmap):
                     continue
 
-                # A diagonal step is valid only when both adjacent cardinal
-                # cells are clear; otherwise a footprint could cut a corner.
+                # 斜向移动必须保证两侧正交格同时畅通，禁止从障碍夹角穿过。
                 if delta_x and delta_y:
                     side_x = (current[0] + delta_x, current[1])
                     side_y = (current[0], current[1] + delta_y)
@@ -468,6 +471,7 @@ class AStarPlanner:
                 if neighbor not in g_score or new_cost < g_score[neighbor]:
                     came_from[neighbor] = current
                     g_score[neighbor] = new_cost
+                    # 欧氏距离与八邻域步长使用同一单位，且不会高估剩余路径代价。
                     heuristic = math.hypot(
                         goal[0] - neighbor[0], goal[1] - neighbor[1]
                     )
@@ -477,6 +481,7 @@ class AStarPlanner:
         return None
 
     def _cell_blocked(self, cell, costmap):
+        """统一处理地图外、膨胀障碍与额外禁行区，供起终点和搜索共用。"""
         grid_x, grid_y = cell
         if not self.grid_in_bounds(grid_x, grid_y):
             return True
@@ -486,14 +491,14 @@ class AStarPlanner:
         return self.is_in_forbidden_zone(world_x, world_y)
 
     # ------------------------------------------------------------------
-    # Coordinate and message helpers
+    # 坐标转换与消息构建
     # ------------------------------------------------------------------
 
     def grid_in_bounds(self, grid_x, grid_y):
         return 0 <= grid_x < self.width and 0 <= grid_y < self.height
 
     def grid_to_world(self, grid_x, grid_y):
-        """将 OccupancyGrid 的行列索引转换到带旋转原点的 map 坐标。"""
+        """将栅格左下角转换到带旋转原点的 map 坐标，未添加半格中心偏移。"""
         yaw = float(self.origin[2]) if len(self.origin) > 2 else 0.0
         local_x = grid_x * self.resolution
         local_y = grid_y * self.resolution
@@ -525,6 +530,7 @@ class AStarPlanner:
         )
 
     def _create_grid_msg(self, data_array):
+        # 按行展开对应 OccupancyGrid 的 x 快变存储顺序；原点旋转也需写入消息。
         msg = OccupancyGrid()
         msg.header.frame_id = self.map_frame
         msg.header.stamp = rospy.Time.now()

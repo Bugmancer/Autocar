@@ -1,8 +1,7 @@
 #pragma once
 
-// Small Eigen-only replacement for the Sophus operations used by this package.
-// Keeping this local makes the ROS1 package buildable without an external
-// Sophus installation while preserving the original right/left Jacobian math.
+// 基于 Eigen 实现本包所需的少量 Sophus 运算，避免引入外部 Sophus 构建依赖。
+// 左/右雅可比约定与滤波器保持一致；此接口仅覆盖本包实际使用的 SO(3) 运算。
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <cmath>
@@ -36,6 +35,7 @@ public:
 
     static SO3d exp(const Eigen::Vector3d &phi)
     {
+        // 旋转向量通过 Rodrigues 公式转为矩阵，小角度使用级数避免除零消减。
         const double theta = phi.norm();
         const Eigen::Matrix3d K = hat(phi);
         Eigen::Matrix3d result = Eigen::Matrix3d::Identity();
@@ -48,6 +48,7 @@ public:
 
     static Eigen::Matrix3d leftJacobian(const Eigen::Vector3d &phi)
     {
+        // 左雅可比将旋转向量的局部增量映射到群上，右雅可比由调用者取转置得到。
         const double theta = phi.norm();
         const Eigen::Matrix3d K = hat(phi);
         if (theta < 1e-8)
@@ -59,6 +60,7 @@ public:
 
     static Eigen::Matrix3d leftJacobianInverse(const Eigen::Vector3d &phi)
     {
+        // 小角度展开与上式一致；滤波更新通过其转置转换右扰动切空间。
         const double theta = phi.norm();
         const Eigen::Matrix3d K = hat(phi);
         if (theta < 1e-8)
@@ -72,4 +74,4 @@ public:
 private:
     Eigen::Matrix3d rotation_;
 };
-}  // namespace Sophus
+}  // Sophus 兼容命名空间

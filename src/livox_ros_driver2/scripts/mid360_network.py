@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Initialize the MID360 link, optionally taking its address from the video NIC."""
+"""初始化 MID360 专用链路，可按显式参数从视频网卡转移指定静态地址。"""
 
 import argparse
 import json
@@ -39,7 +39,7 @@ class Network:
         return result
 
     def query(self, *args):
-        # `ip -4 address show` hides NICs that do not have an IPv4 address yet.
+        # 查询地址时不能加 -4，否则尚无 IPv4 地址的网卡会被 ip 命令隐藏。
         family = [] if args[0] == "address" else ["-4"]
         return json.loads(self.run([self.ip, "-j", *family, *args]).stdout)
 
@@ -47,6 +47,7 @@ class Network:
         self.run([self.ip, "-4", *args])
 
     def preflight(self, takeover_video_address=False):
+        # 全部为只读检查：拒绝地址冲突、共享默认路由及其他业务/DHCP 地址。
         interfaces = self.query("address", "show")
         target = None
         transfer = False
@@ -66,7 +67,7 @@ class Network:
                             % (HOST, name))
                     source_addresses = [a for a in interface.get("addr_info", [])
                                         if a.get("family") == "inet"]
-                    # Deleting a primary address can implicitly delete secondary ones.
+                    # Linux 删除主地址可能连带删除辅助地址，因此转移前要求唯一静态地址。
                     if (len(source_addresses) != 1 or address.get("prefixlen") != 24 or
                             address.get("dynamic", False)):
                         raise NetworkError("enp100s0 must have only the static %s IPv4 address; "
@@ -99,7 +100,7 @@ class Network:
         return addresses, routes, transfer
 
     def verify_route(self):
-        # Check both source-bound traffic (SDK) and normal destination routing.
+        # 同时检查 SDK 绑定源地址的路由与普通目标路由，二者均须直连雷达网卡。
         for suffix in ((), ("from", HOST)):
             routes = self.query("route", "get", LIDAR, *suffix)
             if (len(routes) != 1 or routes[0].get("dev") != INTERFACE or
@@ -108,11 +109,11 @@ class Network:
                 raise NetworkError("Lidar route is not direct eno1 with source %s: %s" % (HOST, routes))
 
     def verify_neighbor(self, clear_cache=True):
-        # Remove only this neighbor so a cached STALE/PERMANENT entry cannot pass.
+        # 只清除此雷达的邻居缓存，避免历史 STALE/PERMANENT 记录被误当作当前可达。
         if clear_cache and self.query("neigh", "show", "to", LIDAR, "dev", INTERFACE):
             self.change("neigh", "del", LIDAR, "dev", INTERFACE)
         for _ in range(5):
-            # ICMP may be filtered. A freshly resolved ARP neighbor is sufficient.
+            # 雷达可能过滤 ICMP；本轮新解析到的可达 ARP 邻居即可证明链路有效。
             self.run([self.ping, "-n", "-I", INTERFACE, "-c", "1", "-W", "1", LIDAR],
                      check=False)
             neighbors = self.query("neigh", "show", "to", LIDAR, "dev", INTERFACE)
@@ -127,11 +128,12 @@ class Network:
         if len(addresses) != 1 or addresses[0]["prefixlen"] != 24 or not routes:
             raise NetworkError("MID360 network needs initialization before starting the driver")
         self.verify_route()
-        # The root helper already cleared cached ARP. Recheck without root writes.
+        # root 助手已清过 ARP 缓存；普通用户这里只探测，不再修改邻居表。
         self.verify_neighbor(clear_cache=False)
         self.verify_route()
 
     def apply(self, takeover_video_address=False):
+        # 修改仅作用于当前内核运行配置，不写持久化网络配置，也不在失败后自动回滚。
         addresses, routes, transfer = self.preflight(takeover_video_address)
         if os.geteuid() != 0:
             raise NetworkError("Network initialization requires root (use sudo for this helper only)")
@@ -139,16 +141,16 @@ class Network:
             LOG.warning("Moving only %s from enp100s0 to eno1; not restored automatically on exit",
                         PREFIX)
             self.change("address", "del", PREFIX, "dev", VIDEO_INTERFACE)
-            # Strict check after transfer also catches a service immediately re-adding it.
+            # 转移后立即复查，发现网络服务重新添加旧地址时停止，避免继续扩大冲突。
             addresses, routes, _ = self.preflight()
         for address in addresses:
             if address["prefixlen"] != 24:
                 self.change("address", "del", HOST + "/" + str(address["prefixlen"]),
                             "dev", INTERFACE)
-        # Removing a primary address can also remove Linux secondary addresses.
+        # 删除主地址可能连带删除辅助地址，操作后重新读取实际内核状态。
         addresses, routes, _ = self.preflight()
         if not any(a["prefixlen"] == 24 for a in addresses):
-            # Do not redirect the entire video subnet: only install a lidar /32 route.
+            # 禁止自动生成整段视频子网路由，仅添加到单台雷达的 /32 主机路由。
             self.change("address", "add", PREFIX, "dev", INTERFACE, "noprefixroute")
         if not routes:
             self.change("route", "add", LIDAR + "/32", "dev", INTERFACE, "src", HOST)

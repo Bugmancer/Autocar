@@ -40,8 +40,7 @@ private:
     CloudType::Ptr m_cloud_lidar;
     CloudType::Ptr m_cloud_down_lidar;
     CloudType::Ptr m_cloud_down_world;
-    // vector<bool> packs bits and causes races when OpenMP workers update
-    // adjacent entries, so keep one byte per point.
+    // vector<bool> 按位打包，相邻点由 OpenMP 并行写入会竞争；每个点独占一字节。
     std::vector<uint8_t> m_point_selected_flag;
     CloudType::Ptr m_norm_vec;
     CloudType::Ptr m_effect_cloud_lidar;

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail the launch when the single MID360 does not supply fresh lidar and IMU data."""
+"""监控单台 MID360 点云/IMU 的递增时间戳、接收速率和发布者数量，异常时退出。"""
 
 from collections import deque
 import math
@@ -19,6 +19,7 @@ class TopicWindow:
         self.lock = threading.Lock()
 
     def add(self, stamp, now):
+        # 时间戳只用于拒绝重复/倒序样本；频率按接收侧单调时钟计算。
         if not math.isfinite(stamp) or stamp <= 0:
             return
         with self.lock:
@@ -28,6 +29,7 @@ class TopicWindow:
             self.samples.append(now)
 
     def rate(self, now):
+        # 样本必须覆盖大部分窗口，避免刚启动时的短时突发被判为正常频率。
         with self.lock:
             while self.samples and now - self.samples[0] > self.seconds:
                 self.samples.popleft()
@@ -77,6 +79,7 @@ def monitor():
                 rospy.loginfo("MID360 topics ready: lidar=%.1f Hz, imu=%.1f Hz", *rates)
                 passed = True
         elif passed:
+            # 启动成功后的异常持续一个窗口才退出；launch 的 required 属性负责联动停机。
             if bad_since is None:
                 bad_since = now
             if now - bad_since > window:
@@ -86,7 +89,7 @@ def monitor():
             rospy.logfatal("MID360 startup timed out: lidar=%.1f Hz, imu=%.1f Hz; "
                            "check mid360_startup.log, topic types and network", *rates)
             return 1
-        # Use wall time, including when a ROS simulated clock is paused.
+        # 使用墙钟等待，ROS 仿真时钟暂停也不会停止看门狗检查。
         time.sleep(0.2)
     return 0
 

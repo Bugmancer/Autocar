@@ -1,4 +1,4 @@
-"""Shared vehicle and discretization geometry for planning and motion checks."""
+"""规划膨胀与运动碰撞检查共用的车体尺寸和离散化误差预算。"""
 
 import math
 from dataclasses import dataclass, fields
@@ -17,6 +17,7 @@ class CollisionGeometry:
     planner_tracking_clearance: float = 0.0
 
     def __post_init__(self):
+        # 车体尺寸和采样分辨率必须严格为正；可选安全余量允许为零。
         for field in fields(self):
             value = getattr(self, field.name)
             minimum_ok = value >= 0 if field.name in (
@@ -51,9 +52,8 @@ class CollisionGeometry:
             raise ValueError('Invalid map resolution')
         padding = self.obstacle_radius + self.collision_sample_distance
         if not dynamic:
-            # Cloud voxels already covered by a static cell may be omitted from
-            # the overlay, so static inflation must also cover their uncertainty.
+            # 已落入静态障碍格的点云体素可能不再叠加，静态膨胀也必须覆盖体素误差。
             padding = max(padding, self.static_padding(resolution, self.collision_sample_distance))
-        # A* searches cell centers while raw occupied points may lie at cell edges.
+        # 为点到栅格代表位置的偏移预留半个栅格对角线；额外跟踪间隙另行累加。
         return (self.body_radius + padding + math.sqrt(2.0) * resolution / 2.0
                 + self.planner_tracking_clearance)

@@ -9,6 +9,7 @@ MapBuilder::MapBuilder(Config &config, std::shared_ptr<IESKF> kf) : m_config(con
 
 void MapBuilder::process(SyncPackage &package)
 {
+    // 状态顺序为 IMU 初始化、首帧建图、持续匹配；初始化帧不参与地图更新。
     if (!package.cloud || package.cloud->empty() || package.imus.empty())
         return;
     if (m_status == BuilderStatus::IMU_INIT)
@@ -18,6 +19,7 @@ void MapBuilder::process(SyncPackage &package)
         return;
     }
 
+    // 先用 IMU 预测并将所有点补偿至扫描末时刻，再用几何残差校正滤波状态。
     m_imu_processor->undistort(package);
 
     if (m_status == BuilderStatus::MAP_INIT)

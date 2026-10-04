@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ROS launch prefix: singleton guard -> root network helper -> unprivileged driver."""
+"""ROS 启动前缀：单实例守卫、提权网络助手检查、普通用户执行驱动。"""
 
 import argparse
 import json
@@ -18,18 +18,20 @@ LOCK_NAME = "\0autocar_v1.mid360.driver"
 
 
 def acquire_lock():
-    # Linux abstract socket: shared across users, no writable lock file/symlink.
+    # Linux 抽象套接字跨用户共享，用于单实例互斥；不创建可被替换的磁盘锁文件。
     guard = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         guard.bind(LOCK_NAME)
     except OSError as error:
         guard.close()
         raise NetworkError("Another guarded MID360 driver is starting/running") from error
+    # exec 后仍持有套接字，互斥覆盖驱动整个生命周期，进程退出后由系统释放。
     guard.set_inheritable(True)
     return guard
 
 
 def check_existing_driver(proc_root=Path("/proc")):
+    # 除使用守卫的实例外，也拒绝已直接启动的旧驱动；无法检查的进程按失败处理。
     for entry in proc_root.iterdir():
         if not entry.name.isdigit() or int(entry.name) == os.getpid():
             continue
@@ -71,8 +73,8 @@ def start(config, command, takeover_video_address=False, prepare_only=False):
         if prepare_only or not configured:
             helper = str(Path(__file__).resolve().with_name("mid360_network.py"))
             helper_args = ["--takeover-video-address"] if takeover_video_address else []
-            # roslaunch uses setsid: its children cannot reuse terminal sudo tickets.
-            # Only --prepare-only, before roslaunch, may prompt on the caller's TTY.
+            # roslaunch 使用 setsid，子进程不能沿用终端 sudo 票据。
+            # 只有提前执行的 --prepare-only 可以向调用者终端请求密码。
             sudo_args = [] if prepare_only else ["-n"]
             result = subprocess.run(
                 ["/usr/bin/sudo", *sudo_args, "/usr/bin/python3", helper, "--apply", *helper_args],
@@ -85,6 +87,7 @@ def start(config, command, takeover_video_address=False, prepare_only=False):
                                    "before roslaunch. Never sudo roslaunch.")
         else:
             LOG.info("Network already configured; verifying without privileged changes")
+        # 网络助手成功后再复查驱动冲突、源地址路由和 ARP，任何失败都禁止执行驱动。
         check_existing_driver()
         network.verify_ready()
         if prepare_only:

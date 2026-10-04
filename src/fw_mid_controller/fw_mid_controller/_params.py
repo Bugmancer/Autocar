@@ -1,8 +1,7 @@
-"""Parameter access shared by controller classes.
+"""控制器共用的参数读取适配。
 
-Controllers are intentionally usable in pure-Python tests.  A ROS1 node (or
-the ``rospy`` module itself) can be passed as the parameter source, while a
-small fake object with ``get_param`` is sufficient for unit tests.
+控制器不直接依赖 ROS 运行时：参数源既可以是 ROS1 节点或 ``rospy`` 模块，
+也可以是单元测试中仅实现 ``get_param`` 的替身对象。
 """
 
 

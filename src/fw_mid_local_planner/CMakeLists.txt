@@ -14,6 +14,7 @@ find_package(catkin REQUIRED COMPONENTS
   visualization_msgs
 )
 
+# 安装可导入的 Python 包；策略、运行层和算法模块通过 setup.py 一起发布。
 catkin_python_setup()
 
 catkin_package(
@@ -30,6 +31,7 @@ catkin_package(
     visualization_msgs
 )
 
+# 两个脚本分别提供经典/APF 可执行入口；launch 只选择其中一个。
 catkin_install_python(PROGRAMS
   scripts/path_follower_node.py
   scripts/path_follower_node_v1.py

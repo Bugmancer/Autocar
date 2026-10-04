@@ -13,6 +13,7 @@ pcl::PointCloud<pcl::PointXYZINormal>::Ptr Utils::livox2PCL(const livox_ros_driv
     cloud->reserve(point_num / filter_num + 1);
     for (std::size_t i = 0; i < point_num; i += static_cast<std::size_t>(filter_num))
     {
+        // 只接收支持的线号与正常回波标签；按原点序号抽样以限制后续计算量。
         if ((msg->points[i].line < 4) && ((msg->points[i].tag & 0x30) == 0x10 || (msg->points[i].tag & 0x30) == 0x00))
         {
 
@@ -30,6 +31,7 @@ pcl::PointCloud<pcl::PointXYZINormal>::Ptr Utils::livox2PCL(const livox_ros_driv
             p.y = y;
             p.z = z;
             p.intensity = msg->points[i].reflectivity;
+            // PCL 无独立逐点时间字段，借 curvature 保存纳秒换算后的毫秒偏移。
             p.curvature = msg->points[i].offset_time / 1000000.0f;
             cloud->push_back(p);
         }
@@ -44,6 +46,7 @@ double Utils::getSec(const std_msgs::Header &header)
 
 double Utils::getLivoxSec(const livox_ros_driver2::CustomMsg &msg)
 {
+    // 优先沿用 ROS 头时间；缺失时回退到雷达提供的纳秒时间基准。
     const double header_time = getSec(msg.header);
     if (header_time > 0.0 && std::isfinite(header_time))
         return header_time;

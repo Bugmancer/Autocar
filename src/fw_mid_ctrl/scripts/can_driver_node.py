@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Project-owned ROS/CAN adapter for the FW-mid chassis.
+"""FW-mid 底盘的项目自有 ROS/CAN 适配节点。
 
-The bundled ``can`` package under this directory is an imported transport
-implementation and is intentionally left unchanged.  This node validates the
-JSON command contract, applies the watchdog, packs the chassis bit layout,
-and decodes feedback into ROS topics.
+同目录的 ``can`` 包为随项目分发的第三方通信实现。本节点负责校验 JSON
+指令、执行超时停车、打包底盘协议位域，并将车辆反馈解码到 ROS 话题。
 """
 
 import json
@@ -17,7 +15,7 @@ import threading
 import time
 from typing import Tuple
 
-# Catkin's devel wrapper does not add the source script directory to sys.path.
+# Catkin 开发空间的脚本包装器不会加入源码目录，需显式加入以加载随包的 can。
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import can
 from can.interfaces.socketcan import SocketcanBus
@@ -30,6 +28,7 @@ def reject_constant(value):
 
 
 def finite_number(value):
+    """拒绝布尔值和非有限数，避免 JSON 类型转换绕过命令数值校验。"""
     if isinstance(value, bool):
         raise ValueError('Boolean is not a command number')
     number = float(value)
@@ -62,9 +61,9 @@ class FwMidCanDriver:
     def __init__(self) -> None:
         can_iface = rospy.get_param('~can_interface', 'can0')
 
-        self.max_vx = float(rospy.get_param('~max_vx', 0.6))          # m/s
-        self.max_vy = float(rospy.get_param('~max_vy', 0.6))          # m/s
-        self.max_wz = float(rospy.get_param('~max_wz', 60.0))         # degree/s
+        self.max_vx = float(rospy.get_param('~max_vx', 0.6))          # 纵向限速，米/秒
+        self.max_vy = float(rospy.get_param('~max_vy', 0.6))          # 横向限速，米/秒
+        self.max_wz = float(rospy.get_param('~max_wz', 60.0))         # 转向限速，度/秒
         self.cmd_timeout = float(rospy.get_param('~cmd_timeout', 0.5))
         self.send_rate = float(rospy.get_param('~send_rate', 20.0))
         self.drive_gear = int(rospy.get_param('~drive_gear', 6))
@@ -108,6 +107,7 @@ class FwMidCanDriver:
                                     self.max_wz, self.drive_gear, self.stop_gear)
             received = time.monotonic()
         except (TypeError, ValueError, OverflowError) as exc:
+            # 错误输入立即替换为停车，并清除有效接收时间，不能续期旧运动指令。
             rospy.logerr_throttle(1.0, 'Rejected command; stopping: %s', exc)
             command = (self.stop_gear, 0.0, 0.0, 0.0)
             received = None
@@ -117,7 +117,6 @@ class FwMidCanDriver:
 
     def transmit_loop(self) -> None:
         # 独立线程按墙钟周期发送，ROS /clock 暂停也不会停掉硬件看门狗。
-        # The hardware watchdog must keep running even if ROS /clock pauses.
         while not self._shutdown.is_set():
             self.tx_timer_cb(None)
             self._shutdown.wait(1.0 / self.send_rate)
@@ -128,6 +127,7 @@ class FwMidCanDriver:
 
         now = time.monotonic()
         with self.lock:
+            # 命令、接收时间和发送位域共用锁，避免读到不同回调批次的混合状态。
             age = now - self.last_cmd_time if self.last_cmd_time is not None else float('inf')
             if age > self.cmd_timeout:
                 gear, vx, vy, wz = self.stop_gear, 0.0, 0.0, 0.0
@@ -138,6 +138,7 @@ class FwMidCanDriver:
             self.send_can_ctrl_msg(gear, vx, vy, wz)
 
     def shutdown(self) -> None:
+        # 先终止周期发送，再补发驻车，最后等待接收线程退出并关闭总线。
         if self._shutdown.is_set():
             return
         self._shutdown.set()
@@ -148,10 +149,10 @@ class FwMidCanDriver:
         self.bus.shutdown()
 
     def send_can_ctrl_msg(self, gear: int, vx: float, vy: float, wz: float) -> None:
-        """Pack physical values into FW-mid CAN control frame."""
-        vx_raw = int(vx / 0.001)    # 0.001 m/s/bit
-        vy_raw = int(vy / 0.001)    # 0.001 m/s/bit
-        wz_raw = int(wz / 0.01)     # 0.01 degree/s/bit
+        """按 FW-mid 控制帧协议将物理量编码为带校验和的 8 字节载荷。"""
+        vx_raw = int(vx / 0.001)    # 每位代表 0.001 米/秒
+        vy_raw = int(vy / 0.001)    # 每位代表 0.001 米/秒
+        wz_raw = int(wz / 0.01)     # 每位代表 0.01 度/秒
 
         vx_raw = max(-32768, min(32767, vx_raw))
         vy_raw = max(-32768, min(32767, vy_raw))
@@ -240,6 +241,7 @@ class FwMidCanDriver:
         self.fb_vel_pub.publish(msg)
 
     def parse_bms_fb(self, data: bytes) -> None:
+        # 电压、容量为无符号字段，电流需还原 16 位补码以区分充放电方向。
         payload = struct.unpack('<Q', data)[0]
         vol_raw = (payload >> 0) & 0xFFFF
         cur_raw = (payload >> 16) & 0xFFFF
@@ -259,6 +261,7 @@ class FwMidCanDriver:
         self.fb_bms_pub.publish(msg)
 
     def parse_io_fb(self, data: bytes) -> None:
+        # 此处只展示急停与控制权反馈；底盘实际急停由硬件执行。
         payload = struct.unpack('<Q', data)[0]
         estop_raw = (payload >> 40) & 0x01
         rc_status_raw = (payload >> 41) & 0x01

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PID path follower retained from the FW-mid ROS2 implementation."""
+"""沿用 FW-mid ROS2 实现的 PID 路径跟踪控制器。"""
 
 import math
 from typing import Sequence
@@ -10,11 +10,10 @@ from ._params import get_param
 
 
 class PIDPathController:
-    """PID tracker for the 4T4D drive mode (``vx`` + ``wz`` only).
+    """用于 4T4D 模式的 PID 跟踪器，只输出纵向速度和角速度。
 
-    The returned angular velocity is in radians per second, matching
-    ``geometry_msgs/Twist``.  Conversion to the CAN driver's degree unit is
-    deliberately outside this package.
+    角速度单位为 rad/s，与 ``geometry_msgs/Twist`` 一致；底盘所需的
+    角度单位转换由下游适配节点完成。
     """
 
     def __init__(self, params=None, cruise_speed=None) -> None:
@@ -122,7 +121,7 @@ class PIDPathController:
             0.0,
             self.max_vx,
         )
-        # A lookahead point guides steering; its spacing must not cap cruise speed.
+        # 显式巡航速度独立于前视点间距，随后仍受近终点和大角差减速约束。
         if self.cruise_speed is not None:
             vx = self.cruise_speed if x_body > 0 else 0.0
         if goal_dist < self.approach_dist:
@@ -147,5 +146,6 @@ class PIDPathController:
 
         self.prev_x_error = x_error
         self.prev_yaw_error = yaw_error
+        # 下一周期从最终输出继续限速；更换路径时必须调用 reset 清除此历史。
         self.prev_cmd = (vx, wz)
         return vx, 0.0, wz

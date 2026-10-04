@@ -4,25 +4,28 @@ body_frame: body
 world_frame: lidar
 print_time_cost: false
 
-# The bundled Livox ROS1 driver publishes acceleration in g despite using
-# sensor_msgs/Imu. Convert it to m/s^2. Use 1.0 only with a driver that already
-# publishes SI acceleration.
+# 配套 Livox ROS1 驱动虽使用 sensor_msgs/Imu，但加速度单位为 g，需换算为米/秒平方。
+# 仅在驱动已经发布 SI 加速度时设为 1.0；launch 同名私有参数优先于本文件。
 imu_acc_scale: 9.80665
+# 扫描时长单位秒；队列和轨迹限长用于限制内存，溢出时按节点逻辑丢弃旧数据。
 max_scan_duration: 0.5
 max_imu_buffer_size: 4000
 max_lidar_buffer_size: 200
 max_path_poses: 10000
 
+# 每隔指定点数保留一份回波，再执行量程筛选；距离和体素尺寸均为米。
 lidar_filter_num: 6
 lidar_min_range: 0.5
 lidar_max_range: 30.0
 scan_resolution: 0.15
 map_resolution: 0.3
 
+# 局部地图立方体尺寸、探测距离和移动阈值共同决定裁剪区域。
 cube_len: 300
 det_range: 60
 move_thresh: 1.5
 
+# 过程噪声依次对应加速度、角速度、加计零偏和陀螺零偏。
 na: 0.01
 ng: 0.01
 nba: 0.0001
@@ -32,9 +35,11 @@ imu_init_num: 20
 near_search_num: 5
 ieskf_max_iter: 5
 
+# 重力对齐依赖启动阶段车辆静止；在线外参估计默认关闭。
 gravity_align: true
 esti_il: false
 
+# 雷达到 IMU/body 的刚体变换，旋转按行排列，平移单位米。
 r_il: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
 t_il: [-0.011, -0.02329, 0.04412]
 

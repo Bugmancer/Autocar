@@ -15,9 +15,8 @@ catkin_install_python(PROGRAMS
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
-# python-can is vendored with this package so the vehicle workspace does not
-# depend on a separately installed Python package.  Install it beside the
-# relayed scripts; this is also where __file__ points in an install space.
+# 随包安装 python-can，使车辆工作空间无需额外安装该 Python 依赖。
+# 安装到节点脚本旁，确保安装空间中按 __file__ 查找也能导入。
 install(DIRECTORY scripts/can
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
   PATTERN "__pycache__" EXCLUDE

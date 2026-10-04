@@ -2,6 +2,7 @@
 #include <cmath>
 bool esti_plane(PointVec &points, const double &thresh, V4D &out)
 {
+    // 最小二乘拟合 ax+by+cz+1=0，归一化后检查每个邻点的点面距离（米）。
     Eigen::MatrixXd A(points.size(), 3);
     Eigen::MatrixXd b(points.size(), 1);
     A.setZero();

@@ -1,4 +1,4 @@
-"""Offline behavioral checks: python -m unittest discover -s .../tests -v."""
+"""势场离线行为测试；运行方式：python -m unittest discover -s .../tests -v。"""
 
 import math
 from pathlib import Path
@@ -30,6 +30,7 @@ class Layer:
 def follower(**overrides):
     params = dict(
         apf_waypoint_stride=4, apf_near_attraction_gain=1.0, apf_far_attraction_gain=0.35,
+        apf_farther_attraction_gain=0.20,
         apf_obstacle_influence_distance=0.9, apf_obstacle_radius=CollisionGeometry().obstacle_radius,
         apf_repulsive_gain=0.08, apf_repulsive_max_force=8.0, apf_max_obstacles=300,
         apf_force_epsilon=1e-4, command_max_vx=0.3, command_max_wz=math.radians(30),
@@ -57,8 +58,8 @@ class PotentialFieldTests(unittest.TestCase):
         c.compute((0, 0, 0), self.path[-1:], None, 0.1)
         self.assertAlmostEqual(c.last_raw_force[0], 1.0)
 
-    def test_obstacle_distance_does_not_scale_speed_outside_danger_zone(self):
-        p = follower(apf_repulsive_gain=0.0001, apf_deadband_v=0)
+    def test_danger_band_reduces_speed_and_overlap_still_fails_collision_check(self):
+        p = follower(apf_repulsive_gain=0.0001, apf_deadband_v=0, apf_accel_limit_v=100)
         speeds = []
         for x in (1.1, 0.9, 0.75, 0.65, 0.52):
             p.dynamic_layer.points = [(x, 0, 10)]
@@ -68,8 +69,20 @@ class PotentialFieldTests(unittest.TestCase):
         self.assertAlmostEqual(speeds[0], speeds[-1])
         p.dynamic_layer.points = [(0.42, 0, 10)]
         c = ArtificialPotentialFieldController(p)
-        self.assertEqual(c.compute((0, 0, 0), self.path, None, 0.1), (0, 0, 0))
-        self.assertEqual(c.status, "danger_zone")
+        command = c.compute((0, 0, 0), self.path, None, 0.1)
+        self.assertGreater(command[0], 0)
+        self.assertLess(command[0], speeds[0])
+        result = FootprintCollisionChecker().check((0, 0, 0), command[0], command[2], [(0.42, 0)])
+        self.assertFalse(result.safe)
+
+    def test_three_distinct_targets_contribute_without_repeating_path_end(self):
+        c = ArtificialPotentialFieldController(follower(apf_waypoint_stride=2))
+        c.compute((0, 0, 0), self.path, None, 0.1)
+        self.assertAlmostEqual(c.last_raw_force[0], 1.55)
+        c.compute((0, 0, 0), self.path[:3], None, 0.1)
+        self.assertAlmostEqual(c.last_raw_force[0], 1.35)
+        c.compute((0, 0, 0), self.path[:1], None, 0.1)
+        self.assertAlmostEqual(c.last_raw_force[0], 1.0)
 
     def test_command_cap_below_minimum_speed_is_respected(self):
         p = follower(command_max_vx=0.02, apf_min_vx=0.1, apf_deadband_v=0)
@@ -142,15 +155,17 @@ class PotentialFieldTests(unittest.TestCase):
         c.reset()
         self.assertIsNone(c.last_force)
 
-    def test_danger_stop_is_not_delayed_by_force_filter(self):
+    def test_danger_band_keeps_existing_rate_limit_and_final_collision_guard(self):
         p = follower(apf_force_filter_time=10.0)
         c = ArtificialPotentialFieldController(p)
         c.compute((0, 0, 0), self.path, None, 0.1)
         c.prev_cmd = (0.3, 0)
         p.dynamic_layer.points = [(0.38, 0, 10)]
-        self.assertEqual(c.compute((0, 0, 0), self.path, None, 0.1)[0], 0)
-        self.assertEqual(c.status, "danger_zone")
-        self.assertIsNone(c.last_force)
+        command = c.compute((0, 0, 0), self.path, None, 0.1)
+        self.assertAlmostEqual(command[0], 0.275)
+        self.assertIsNotNone(c.last_force)
+        result = FootprintCollisionChecker().check((0, 0, 0), command[0], command[2], [(0.38, 0)])
+        self.assertFalse(result.safe)
         self.assertLess(c.last_raw_force[0], 0)
 
     def test_filter_handles_angle_wraparound(self):
@@ -168,7 +183,8 @@ class PotentialFieldTests(unittest.TestCase):
         c = ArtificialPotentialFieldController(p)
         command = c.compute((0, 0, 0), self.path, None, 0.1)
         self.assertLess(c.last_raw_force[0], 0)
-        self.assertEqual(command[0], 0)
+        self.assertGreater(command[0], 0)
+        self.assertLessEqual(command[0], p.command_max_vx * p.apf_min_speed_scale)
         self.assertEqual(c.status, "tracking")
 
     def test_startup_escapes_deadbands_at_multiple_rates(self):

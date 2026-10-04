@@ -21,6 +21,7 @@ ICPLocalizer::ICPLocalizer(const ICPConfig &config)
 CloudType::Ptr ICPLocalizer::downsample(const CloudType::ConstPtr &cloud,
                                         const double resolution)
 {
+    // 分辨率为零时只复制点云，正值为三轴一致的体素边长（米）。
     CloudType::Ptr output(new CloudType);
     if (resolution <= 0.0)
     {
@@ -79,6 +80,7 @@ bool ICPLocalizer::loadMap(const std::string &path, std::string *error_message)
 
 void ICPLocalizer::setInput(const CloudType::ConstPtr &cloud)
 {
+    // 输入快照先去除非有限点，再分别为粗配准、精配准生成独立降采样点云。
     CloudType::Ptr finite_cloud(new CloudType);
     pcl::copyPointCloud(*cloud, *finite_cloud);
     finite_cloud->is_dense = false;
@@ -105,6 +107,7 @@ bool ICPLocalizer::align(M4F &guess)
     rough_icp_.setInputSource(rough_input_);
     rough_icp_.setInputTarget(rough_target_);
     rough_icp_.align(aligned_cloud, guess);
+    // PCL fitness 为最近邻平方距离均值，门限单位是平方米，不能按米直接配置。
     last_rough_score_ = rough_icp_.getFitnessScore();
     if (!rough_icp_.hasConverged() || !std::isfinite(last_rough_score_) ||
         last_rough_score_ > config_.rough_score_thresh)

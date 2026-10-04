@@ -1,6 +1,6 @@
 <launch>
   <arg name="map_pcd" default="$(find fw_mid_localizer)/maps/underground/map.pcd" />
-  <!-- Map-to-body estimate: x, y, z, yaw, pitch, roll; metres and radians. -->
+  <!-- body 在 map 中的初值顺序：x、y、z、yaw、pitch、roll，单位为米和弧度。 -->
   <arg name="initial_pose" default="[0,0,0,0,0,0]" />
   <arg name="start_lidar" default="true" />
   <arg name="takeover_video_address" default="true" />

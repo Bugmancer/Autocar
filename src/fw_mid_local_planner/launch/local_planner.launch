@@ -6,12 +6,14 @@
   <arg name="base_frame" default="base_link" />
   <arg name="body_to_base_link" default="0.28991 0.0 -0.81317 0.0 -0.785398 0.0" />
   <arg name="require_localization" default="false" />
-  <arg name="follower_node" default="path_follower_node.py" />
+  <arg name="follower_variant" default="classic" />
+  <!-- 保留旧脚本名覆盖参数；字典限制可选入口，未知策略在启动阶段报错。 -->
+  <arg name="follower_node" default="$(eval {'classic': 'path_follower_node.py', 'apf': 'path_follower_node_v1.py'}[arg('follower_variant')])" />
   <arg name="max_vx" default="0.30" />
-  <!-- Same units and limits as navigation_driver.launch: m/s and deg/s. -->
+  <!-- 必须与 navigation_driver.launch 使用相同上限，单位分别为米/秒和度/秒。 -->
   <arg name="max_wz" default="30.0" />
 
-  <!-- Source-project mounting values; verify against the vehicle calibration. -->
+  <!-- 此处为原项目安装外参，部署前按实车标定核对；同一 TF 只能保留一个发布者。 -->
   <group if="$(arg publish_body_to_base_link_tf)">
     <node pkg="tf2_ros"
           type="static_transform_publisher"
@@ -21,7 +23,7 @@
   </group>
 
   <node pkg="fw_mid_local_planner"
-        type="$(arg follower_node)"
+        type="$(eval {'path_follower_node.py': 'path_follower_node.py', 'path_follower_node_v1.py': 'path_follower_node_v1.py'}[arg('follower_node')])"
         name="path_follower_node"
         output="screen">
     <rosparam command="load" file="$(arg config_file)" />
