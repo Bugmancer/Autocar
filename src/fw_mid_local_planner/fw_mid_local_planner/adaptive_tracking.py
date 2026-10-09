@@ -130,12 +130,22 @@ class AdaptiveTracking:
 
     def command_diagnostics(self):
         c = self.controller
-        return c.status, c.progress, c.lookahead, c.nearest_clearance, c.bypass_side
+        return (c.status, c.progress, c.lookahead, c.nearest_clearance, c.bypass_side,
+                c.heading_error, c.raw_heading_error, c.yaw_braking,
+                c.obstacle_heading_correction)
 
     def command_published(self, accepted, requested_vx, requested_wz, diagnostics):
+        actual = self.follower._last_command
         if accepted:
-            self.controller.sync_command(self.follower._last_command, (requested_vx, requested_wz))
-        rospy.loginfo_throttle(1.0, "V3: state=%s progress=%.3f lookahead=%.3f clearance=%.3f side=%d accepted=%s" % (*diagnostics, accepted))
+            self.controller.sync_command(actual, (requested_vx, requested_wz))
+        state, progress, lookahead, clearance, side, error, raw_error, braking, correction = diagnostics
+        rospy.loginfo_throttle(1.0,
+            "V3: state=%s progress=%.3f lookahead=%.3f clearance=%.3f side=%d accepted=%s "
+            "heading_error_deg=%.1f raw_heading_error_deg=%.1f vx=%.3f wz_deg=%.1f "
+            "yaw_braking=%s obstacle_correction_deg=%.1f measured_wz_deg=%.1f"
+            % (state, progress, lookahead, clearance, side, accepted,
+               math.degrees(error), math.degrees(raw_error), actual[0], math.degrees(actual[1]),
+               braking, math.degrees(correction), math.degrees(self.follower._measured_velocity[1])))
 
     def desired_direction(self, pose, target, active):
         force = self.controller.last_force

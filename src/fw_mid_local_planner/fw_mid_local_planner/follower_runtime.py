@@ -408,7 +408,9 @@ class FollowerRuntime:
             self.avoidance_state = "avoiding" if kind == "avoidance" else "normal"
             self.waiting_for_plan = False
             self.publish_path_points(self.global_path)
-            if kind != "avoidance" or not self.dynamic_keep_moving_during_replan:
+            continuous_replan = self.dynamic_keep_moving_during_replan and (
+                kind == "avoidance" or (kind == "resume" and self.tracking.name == "v3"))
+            if not continuous_replan:
                 self.reset_controllers()
         rospy.loginfo(
             "%s A* path accepted: raw=%d processed=%d",
@@ -726,7 +728,7 @@ class FollowerRuntime:
                 and (not self.recovery_planning or self.collision_check_enabled)
                 and self.dynamic_keep_moving_during_replan
                 and bool(self.global_path)
-                and self.pending_plan_kind == "avoidance"
+                and self.pending_plan_kind in ("avoidance", "resume")
             )
 
     def control_loop(self, _event) -> None:
@@ -822,7 +824,7 @@ class FollowerRuntime:
             ):
                 self.avoidance_state = "normal"
                 self.reset_avoidance_tracking()
-                self.request_plan(robot_pose, "normal")
+                self.request_plan(robot_pose, "resume" if self.tracking.name == "v3" else "normal")
                 return
             # 等待避障的停车状态也需重试；不能因为记忆障碍中心没变化而永久停止重规划。
             recovering = self.avoidance_state == "wait"

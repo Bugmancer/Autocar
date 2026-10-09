@@ -1,6 +1,7 @@
 """复用 ROS 传输替身，验证 V3 独立入口和公共安全流程的完整接入。"""
 
 import importlib
+import math
 import threading
 from types import SimpleNamespace
 import unittest
@@ -98,6 +99,50 @@ class V3IntegrationTests(unittest.TestCase):
         for call in check.call_args_list:
             self.assertEqual(call.args[3], points)
 
+    def test_rejected_nominal_falls_back_only_after_collision_check(self):
+        node = self.make_node(dynamic_avoidance_mode="off")
+        pose = (0, 0, 0)
+        command = node.tracking.compute(pose, node.global_path,
+                                        node.global_path[-1], node.control_dt)
+        nominal = (command[0], command[2])
+        collision_check = node.collision_checker.check
+
+        def reject_nominal(checked_pose, vx, wz, *args, **kwargs):
+            if (vx, wz) == nominal:
+                return adapters.RUNTIME.CollisionCheckResult(
+                    False, [pose, (0.01, 0, 0)], (0.5, 0), "dynamic_obstacle")
+            return collision_check(checked_pose, vx, wz, *args, **kwargs)
+
+        with patch.object(node.collision_checker, "check", side_effect=reject_nominal) as check:
+            selected = node.tracking.refine_command(pose, command, 0)
+            self.assertEqual(check.call_count, 2)
+            self.assertEqual(check.call_args_list[0].args[1:3], nominal)
+            self.assertEqual(check.call_args_list[1].args[1:3], (selected[0], selected[2]))
+            self.assertNotEqual((selected[0], selected[2]), nominal)
+            self.assertTrue(node.publish_cmd(*selected, robot_pose=pose, generation=0))
+            self.assertEqual(check.call_count, 3)
+            self.assertEqual(check.call_args_list[-1].args[1:3], node._last_command)
+
+    def test_diagnostics_preserve_heading_errors_and_report_published_command(self):
+        for accepted in (False, True):
+            with self.subTest(accepted=accepted):
+                node = self.make_node(dynamic_avoidance_mode="off", command_max_vx=0.4)
+                controller = node.tracking.controller
+                controller.status = "tracking"
+                controller.heading_error = math.radians(60)
+                controller.raw_heading_error = math.radians(-70)
+                vx = 0.6 if accepted else float("nan")
+                self.assertEqual(node.publish_cmd(vx, 0, 1.2,
+                    robot_pose=(0, 0, 0), generation=0), accepted)
+                logged = adapters.ROS.loginfo_throttle.call_args.args[1]
+                self.assertIn("state=tracking", logged)
+                self.assertIn("accepted=%s" % accepted, logged)
+                self.assertIn("heading_error_deg=60.0", logged)
+                self.assertIn("raw_heading_error_deg=-70.0", logged)
+                self.assertIn("vx=%.3f" % node._last_command[0], logged)
+                self.assertIn("wz_deg=%.1f" % math.degrees(node._last_command[1]), logged)
+                self.assertEqual(node._last_command[0], 0.4 if accepted else 0.0)
+
     def test_required_rear_detour_is_not_trimmed_by_body_heading(self):
         node = self.make_node(dynamic_avoidance_mode="off")
         self.prepare_control_cycle(node)
@@ -150,6 +195,60 @@ class V3IntegrationTests(unittest.TestCase):
         node.control_loop(None)
         self.assertAlmostEqual(node.tracking.controller.progress, 0.0)
         self.assertEqual(node.tracking.controller.bypass_side, 0)
+
+    def test_resume_path_preserves_motion_only_for_continuous_v3(self):
+        for strategy in (self.strategy, adapters.APF.APFTracking, adapters.CLASSIC.ClassicTracking):
+            for keep_moving in (False, True):
+                with self.subTest(strategy=strategy.__name__, keep_moving=keep_moving):
+                    node = self.adapters.make_node(strategy,
+                        dynamic_keep_moving_during_replan=keep_moving,
+                        require_overlay_ack=False, planner_overlay_settle_time=0.0,
+                        command_max_vx=0.4, command_max_wz_deg=30.0)
+                    self.prepare_control_cycle(node)
+                    published = (0.3, 0.1)
+                    node._last_command = node._measured_velocity = published
+                    node.tracking.controller.prev_cmd = published
+                    node.waiting_for_plan = True
+                    node.pending_plan_kind = "resume"
+                    endpoint = adapters.Message()
+                    endpoint.pose.position.x = 2.0
+                    response = SimpleNamespace(plan=adapters.Message(poses=[endpoint]))
+                    with patch.object(adapters.ROS, "wait_for_service", create=True), \
+                            patch.object(adapters.ROS, "ServiceProxy", create=True,
+                                         return_value=Mock(return_value=response)):
+                        node._plan_worker(adapters.Message(), "resume", node._plan_generation, None)
+                    continuous = strategy is self.strategy and keep_moving
+                    self.assertEqual(node.tracking.controller.prev_cmd,
+                                     published if continuous else (0.0, 0.0))
+                    self.assertFalse(node.waiting_for_plan)
+                    self.assertTrue(node.global_path)
+                    if continuous:
+                        node.control_loop(None)
+                        self.assertGreaterEqual(node.cmd_pub.messages[-1].linear.x,
+                            published[0] - node.collision_checker.linear_deceleration * node.control_dt)
+                        self.assertEqual(node.tracking.controller.prev_cmd, node._last_command)
+
+    def test_failed_resume_plan_still_stops_continuous_v3(self):
+        for failure in ("service", "empty", "processing"):
+            with self.subTest(failure=failure):
+                node = self.make_node(require_overlay_ack=False,
+                    planner_overlay_settle_time=0.0, start_recovery_enabled=False)
+                node._last_command = node.tracking.controller.prev_cmd = (0.3, 0.1)
+                node.waiting_for_plan = True
+                node.pending_plan_kind = "resume"
+                endpoint = adapters.Message()
+                endpoint.pose.position.x = 2.0
+                response = SimpleNamespace(plan=adapters.Message(
+                    poses=[] if failure == "empty" else [endpoint]))
+                client = Mock(return_value=response,
+                              side_effect=RuntimeError("planner unavailable") if failure == "service" else None)
+                if failure == "processing":
+                    node.process_planned_path = Mock(return_value=[])
+                with patch.object(adapters.ROS, "wait_for_service", create=True), \
+                        patch.object(adapters.ROS, "ServiceProxy", create=True, return_value=client):
+                    node._plan_worker(adapters.Message(), "resume", node._plan_generation, None)
+                self.assertFalse(node.waiting_for_plan)
+                self.adapters.assert_stopped(node)
 
     def test_final_safety_gates_reject_invalid_motion(self):
         failures = ("nan", "infinity", "lateral", "generation", "localization",

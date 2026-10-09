@@ -90,6 +90,22 @@ class AdaptiveControllerTests(unittest.TestCase):
         self.assertAlmostEqual(sectors[0][3][0], 0.0)
         self.assertAlmostEqual(sectors[0][3][1], -1.0)
 
+    def test_dense_obstacle_guidance_cannot_reverse_the_planned_direction(self):
+        for heading in (0.0, math.pi / 3):
+            with self.subTest(heading=heading):
+                c = self.make_controller(repulsive_gain=100, tangent_gain=100)
+                ux, uy = math.cos(heading), math.sin(heading)
+                pose = (0, 0, heading)
+                path = self.path([(0, 0), (3 * ux, 3 * uy)])
+                points = [(0.5 * ux - lateral * uy, 0.5 * uy + lateral * ux)
+                          for lateral in (-0.3, -0.1, 0.1, 0.3)]
+                c.compute(pose, path, 0.1, points, 0)
+                force = c.last_force
+                self.assertGreater(force[0] * ux + force[1] * uy, 0)
+                self.assertLessEqual(abs(math.atan2(
+                    -uy * force[0] + ux * force[1], ux * force[0] + uy * force[1])),
+                    c.p.obstacle_heading_limit + 1e-12)
+
     def test_bypass_side_survives_sensor_jitter_and_temporary_stop(self):
         c = self.make_controller()
         path = self.path([(0, 0), (3, 0)])
@@ -145,6 +161,36 @@ class AdaptiveControllerTests(unittest.TestCase):
         self.assertGreater(velocity, 0)
         self.assertEqual(turn, 0)
 
+    def test_replan_preserves_preview_and_direction_filter(self):
+        c = self.make_controller()
+        path = self.path([(0, 0), (4, 0)])
+        c.follower._measured_velocity = (0.3, 0)
+        for i in range(20):
+            c.compute((0, 0, 0), path, 0.1, [], i * 0.1)
+        lookahead, force = c.lookahead, c.last_force
+        replacement = self.path([(0.2, 0), (4, 0.2)])
+        c.update_path_progress((0.3, 0, 0), replacement)
+        self.assertEqual(c.lookahead, lookahead)
+        self.assertEqual(c.last_force, force)
+        self.assertGreater(c.progress, 0)
+        # 停车后接入新的目标路径仍从干净的方向状态起步。
+        c.stop()
+        c.update_path_progress((0.3, 0, 0), self.path([(0.3, 0), (0.3, 3)]))
+        self.assertEqual(c.lookahead, c.p.lookahead_min)
+        self.assertIsNone(c.last_force)
+
+    def test_rotation_hysteresis_avoids_boundary_stop_start(self):
+        c = self.make_controller(force_filter_time=0)
+        path = self.path([(0, 0), (4, 0)])
+        c.compute((0, 0, -1.4), path, 0.1, [], 0)
+        self.assertEqual(c.status, "rotating")
+        c.compute((0, 0, -0.8), path, 0.1, [], 0.1)
+        self.assertEqual(c.status, "rotating")
+        c.compute((0, 0, -0.4), path, 0.1, [], 0.2)
+        self.assertEqual(c.status, "tracking")
+        c.compute((0, 0, -0.8), path, 0.1, [], 0.3)
+        self.assertEqual(c.status, "tracking")
+
     def test_every_candidate_obeys_actual_lateral_acceleration(self):
         c = self.make_controller(lateral_acceleration=0.01)
         path = self.path([(0, 0), (4, 2)])
@@ -159,6 +205,22 @@ class AdaptiveControllerTests(unittest.TestCase):
             c.sync_command((velocity, turn), (output[0], output[2]))
             pose = FootprintCollisionChecker._advance(pose, velocity, turn, 0.1)
 
+    def test_turn_ramp_does_not_force_an_abrupt_linear_braking_step(self):
+        for direction in (-1, 1):
+            with self.subTest(direction=direction):
+                c = self.make_controller()
+                c.follower.command_max_vx = 1.0
+                c.follower.command_max_wz = math.radians(30)
+                c.prev_cmd = c.last_command = (0.68, direction * 0.35)
+                c.follower._measured_velocity = c.last_command
+                path = self.path([(0, 0), (4, direction * 2)])
+                output = c.compute((0, 0, 0), path, 0.1, [], 0)
+                minimum_speed = 0.68 - c.follower.collision_checker.linear_deceleration * 0.1
+                for velocity, turn in c.candidates:
+                    self.assertGreaterEqual(velocity, minimum_speed - 1e-12)
+                    self.assertLessEqual(velocity * abs(turn), c.p.lateral_acceleration + 1e-12)
+                self.assertGreaterEqual(output[0], minimum_speed - 1e-12)
+
     def test_endpoint_projection_keeps_correcting_lateral_goal_error(self):
         c = self.make_controller()
         path = self.path([(0, 0), (2, 0)])
@@ -171,7 +233,9 @@ class AdaptiveControllerTests(unittest.TestCase):
         for name, value in (("lookahead_min", -1), ("lookahead_min", 2),
                             ("obstacle_sectors", 0), ("obstacle_sectors", 8.5),
                             ("trajectory_max_checks", 16), ("accel_v", float("nan")),
-                            ("rotate_threshold", math.pi)):
+                            ("rotate_threshold", math.pi), ("rotate_exit_threshold", 1.35),
+                            ("rotate_exit_wz", 0), ("yaw_response_time", -1),
+                            ("obstacle_heading_limit", math.pi / 2)):
             with self.subTest(name=name, value=value), self.assertRaises(ValueError):
                 V3Parameters.from_getter(lambda key, default: value if key == "v3_" + name else default)
         c = self.make_controller()

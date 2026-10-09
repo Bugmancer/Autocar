@@ -21,7 +21,7 @@ def clamp(value, lower, upper):
 class V3Parameters:
     """仅由 V3 读取的参数；长度为米，时间为秒，加速度为 SI 单位。"""
 
-    lookahead_min: float = 0.25
+    lookahead_min: float = 0.45
     lookahead_max: float = 0.80
     lookahead_time: float = 1.5
     lookahead_filter_time: float = 0.30
@@ -31,11 +31,15 @@ class V3Parameters:
     accel_v: float = 0.25
     accel_w: float = 0.40
     heading_gain: float = 1.80
-    rotate_threshold: float = 0.90
+    yaw_response_time: float = 0.35
+    rotate_threshold: float = 1.35
+    rotate_exit_threshold: float = 0.45
+    rotate_exit_wz: float = 0.15
     goal_approach_distance: float = 0.60
     obstacle_influence: float = 0.65
     repulsive_gain: float = 1.50
     tangent_gain: float = 0.80
+    obstacle_heading_limit: float = 0.20
     obstacle_sectors: int = 36
     side_hold_time: float = 1.0
     force_filter_time: float = 0.15
@@ -51,7 +55,8 @@ class V3Parameters:
         values = {}
         integer_fields = {"obstacle_sectors": (8, 180), "trajectory_max_checks": (1, 15)}
         nonnegative = {"repulsive_gain", "tangent_gain", "curvature_gain",
-                       "lookahead_filter_time", "force_filter_time", "deadband_v", "deadband_w"}
+                       "lookahead_filter_time", "force_filter_time", "deadband_v", "deadband_w",
+                       "yaw_response_time", "obstacle_heading_limit"}
         for field in fields(cls):
             value = float(getter("v3_" + field.name, field.default))
             if not math.isfinite(value) or (value < 0 if field.name in nonnegative else value <= 0):
@@ -63,7 +68,9 @@ class V3Parameters:
                 value = int(value)
             values[field.name] = value
         if (values["lookahead_min"] > values["lookahead_max"]
-                or values["rotate_threshold"] >= math.pi):
+                or values["rotate_threshold"] >= math.pi
+                or values["rotate_exit_threshold"] >= values["rotate_threshold"]
+                or values["obstacle_heading_limit"] >= math.pi / 2):
             raise ValueError("Invalid V3 lookahead or rotation bounds")
         return cls(**values)
 
@@ -86,6 +93,11 @@ class AdaptiveController:
         """停车清掉速度爬升；保留路径进度及绕行侧，避免临时停车后跳段或换边。"""
         self.prev_cmd = self.last_command = (0.0, 0.0)
         self.last_force = None
+        self.lookahead = self.p.lookahead_min
+        self._rotating = False
+        self.heading_error = self.raw_heading_error = 0.0
+        self.steering_error = self.obstacle_heading_correction = 0.0
+        self.yaw_braking = False
         self.status = "idle"
         self.candidates = []
         self.nearest_clearance = float("inf")
@@ -117,9 +129,8 @@ class AdaptiveController:
             # 持有端点对象，避免旧路径释放后 Python 重用 id 而误认为同一路径。
             self._path_anchors = (path[0], path[-1])
             self.progress, self._progress_limit = initial_progress, initial_progress + 0.20
-            self.lookahead = self.p.lookahead_min
             self.bypass_side, self._last_blocking_time = 0, None
-            self.last_force = None
+            # 同目标重规划只重建进度，保留前视和方向滤波；停车/换目标由 stop 清零。
             self.last_pose = pose
         displacement = math.hypot(pose[0] - self.last_pose[0], pose[1] - self.last_pose[1])
         self._progress_limit = min(self.reference.length, self._progress_limit + 1.5 * displacement)
@@ -217,11 +228,28 @@ class AdaptiveController:
             result[1] += strength * tangent[1]
         elif self._last_blocking_time is not None and now - self._last_blocking_time > p.side_hold_time:
             self.bypass_side = 0
-        return tuple(result)
+        # A* 已规划绕行；势场只做有限的侧向微调，不抵消路径的前向引导。
+        norm = math.hypot(*attraction)
+        lateral = clamp(-s * result[0] + c * result[1],
+                        -norm * math.tan(p.obstacle_heading_limit),
+                        norm * math.tan(p.obstacle_heading_limit))
+        self.obstacle_heading_correction = math.atan2(lateral, norm) if norm else 0.0
+        return -s * lateral, c * lateral
+
+    def _yaw_limit(self, error):
+        deceleration = min(self.p.accel_w, self.follower.collision_checker.angular_deceleration)
+        reaction = deceleration * self.p.yaw_response_time
+        # 解 w*t_response + w^2/(2*a) <= 剩余角度，接近对齐前即开始转向制动。
+        return min(self.follower.command_max_wz,
+                   math.sqrt(reaction * reaction + 2.0 * deceleration * abs(error)) - reaction)
+
+    def _stopping_yaw(self, turn):
+        deceleration = min(self.p.accel_w, self.follower.collision_checker.angular_deceleration)
+        return abs(turn) * self.p.yaw_response_time + turn * turn / (2.0 * deceleration)
 
     def _speed_reference(self, error):
         p, f = self.p, self.follower
-        if abs(error) >= p.rotate_threshold:
+        if self._rotating:
             return 0.0
         steering_curvature = abs(2.0 * math.sin(error) / self.lookahead)
         curvature = max(self.reference_curvature, steering_curvature, 1e-9)
@@ -235,8 +263,8 @@ class AdaptiveController:
                     math.sqrt(p.lateral_acceleration / curvature),
                     math.sqrt(2.0 * f.collision_checker.linear_deceleration * distance))
         speed *= min(1.0, distance / p.goal_approach_distance) * max(0.0, math.cos(error))
-        if self.nearest_clearance < p.obstacle_influence:
-            speed *= clamp(self.nearest_clearance / p.obstacle_influence, 0.0, 1.0)
+        # if self.nearest_clearance < p.obstacle_influence:
+        #     speed *= clamp(self.nearest_clearance / p.obstacle_influence, 0.0, 1.0)
         return speed
 
     def compute(self, pose, path, dt, obstacles, now):
@@ -260,32 +288,61 @@ class AdaptiveController:
         heading = math.atan2(self.last_force[1], self.last_force[0])
         error = normalize_angle(heading - pose[2])
         raw_error = normalize_angle(math.atan2(raw[1], raw[0]) - pose[2])
+        self.heading_error, self.raw_heading_error = error, raw_error
+        measured_w = self.follower._measured_velocity[1]
+        old_v, old_w = self.prev_cmd
+        self.steering_error = normalize_angle(error - measured_w * self.p.yaw_response_time)
+        turning_error = max(abs(error), abs(raw_error))
+        if self._rotating:
+            if (turning_error <= self.p.rotate_exit_threshold
+                    and max(abs(old_w), abs(measured_w)) <= self.p.rotate_exit_wz):
+                self._rotating = False
+        elif turning_error >= self.p.rotate_threshold:
+            self._rotating = True
         # 新出现的急转要求立即参与限速，不能被方向滤波延后。
         speed = min(self._speed_reference(error), self._speed_reference(raw_error))
         f, p = self.follower, self.p
-        target_w = clamp(p.heading_gain * error, -f.command_max_wz, f.command_max_wz)
-        old_v, old_w = self.prev_cmd
+        self.yaw_braking = any(abs(turn) > p.deadband_w and (
+            turn * error <= 0.0 or self._stopping_yaw(turn) >= abs(error))
+            for turn in (old_w, measured_w))
+        if self.yaw_braking:
+            speed = min(speed, old_v)
         vx = clamp(speed, max(0.0, old_v - f.collision_checker.linear_deceleration * dt), old_v + p.accel_v * dt)
-        wz = clamp(target_w, old_w - p.accel_w * dt, old_w + p.accel_w * dt)
+        turn_limit = self._yaw_limit(error)
+        if self._rotating:
+            target_w = (0.0 if turning_error <= p.rotate_exit_threshold else
+                        clamp(p.heading_gain * self.steering_error, -turn_limit, turn_limit))
+        else:
+            # 实测转速预估短时航向变化，给底盘转向滞后留出制动时间。
+            target_w = clamp(vx * 2.0 * math.sin(self.steering_error) / self.lookahead,
+                             -turn_limit, turn_limit)
+        # 转速窗先与最低可达车速相容，避免随后横向约束造成超出制动斜率的急减速。
+        low_v = max(0.0, old_v - f.collision_checker.linear_deceleration * dt)
+        reachable_w = p.lateral_acceleration / max(low_v, 1e-9)
+        wz = clamp(target_w, max(-reachable_w, old_w - p.accel_w * dt),
+                   min(reachable_w, old_w + p.accel_w * dt))
         vx, wz = min(vx, f.command_max_vx), clamp(wz, -f.command_max_wz, f.command_max_wz)
         # 实际角速度含航向反馈，不能只用路径曲率替代真实 v*w 横向加速度。
         vx = min(vx, p.lateral_acceleration / max(abs(wz), 1e-9))
         self.prev_cmd = (vx, wz)
         command = (0.0 if vx < p.deadband_v else vx,
                    0.0 if abs(wz) < p.deadband_w else wz)
-        self.status = "rotating" if abs(error) >= p.rotate_threshold else "tracking"
+        self.status = "rotating" if self._rotating else "tracking"
         self.candidates = self._candidates(pose, command, speed, heading, dt, sectors, (old_v, old_w))
         self.last_command = command
         return command[0], 0.0, command[1]
 
     def _candidates(self, pose, nominal, speed, heading, dt, sectors, previous):
-        """对可达速度窗内的短弧线排序；硬碰撞约束由适配层逐个验证。"""
+        """优先检查连续跟踪命令；仅在受阻时使用可达速度窗内的备选短弧线。"""
         f, p = self.follower, self.p
         horizon = f.collision_checker.prediction_time
         low_v = max(0.0, previous[0] - f.collision_checker.linear_deceleration * dt)
         high_v = min(f.command_max_vx, previous[0] + p.accel_v * dt)
-        low_w = max(-f.command_max_wz, previous[1] - p.accel_w * dt)
-        high_w = min(f.command_max_wz, previous[1] + p.accel_w * dt)
+        if self.yaw_braking:
+            high_v = min(high_v, previous[0])
+        reachable_w = p.lateral_acceleration / max(low_v, 1e-9)
+        low_w = max(-f.command_max_wz, previous[1] - p.accel_w * dt, -reachable_w)
+        high_w = min(f.command_max_wz, previous[1] + p.accel_w * dt, reachable_w)
         # 包含原始命令和减速候选，转向两侧都保留，以免绕行偏好成为硬性方向约束。
         velocities = {nominal[0], clamp(speed * 0.5, low_v, high_v), low_v}
         turns = {nominal[1], low_w, high_w, clamp(0.0, low_w, high_w)}
@@ -310,7 +367,8 @@ class AdaptiveController:
                     score += 0.20 * max(0.0, 1.0 - clearance / p.obstacle_influence)
                 ranked.append((score, velocity, turn))
         # 相同输出的死区候选只检一次，限制昂贵的车身栅格查询次数。
-        commands = []
+        # 安全的正常跟踪不应被评分换成停车或更强转向，导致下一周期再次纠偏。
+        commands = [nominal]
         for _, velocity, turn in sorted(ranked):
             if (velocity, turn) not in commands:
                 commands.append((velocity, turn))

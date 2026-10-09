@@ -49,10 +49,10 @@ APF 关闭通用的 `obstacle_slowdown_enabled`，但保留上述策略内降速
 
 ### V3 算法与参数
 
-- **路径进度与前视**：在有序路径上投影，按弧长插值取目标；投影前进范围随车辆实际位移增长，保留后方绕行段。前视随速度增加、随预瞄曲率缩短并平滑变化，急弯降低远目标权重。
-- **连续限速**：联合路径/转向曲率、角速度上限、横向加速度和终点制动确定速度，并约束候选命令的 `v * abs(w)`。大航向误差转入原地转向；到点同时要求 XY 距离与剩余弧长进入容差。
-- **几何斥力与绕行侧**：每个角扇区保留到带余量矩形车身净距最近的障碍，重复点不会叠加放大斥力；全局路径参与选择绕行侧，切向引导与保持时间减少反复换边。
-- **短轨迹选择**：在可达速度窗内生成短弧线，按路径进展、偏离、方向、净距和速度变化排序，再依次执行完整车身扫掠与实测速度制动检查。扇区压缩只用于引导和评分，碰撞检查仍使用完整近场障碍与静态地图。检查次数或时间预算耗尽且无安全候选时停车；时间预算只在完整检查之间判断，不能保证单周期耗时上限，最终命令仍经过公共发布检查。
+- **路径进度与前视**：在有序路径上投影，按弧长插值取目标；投影前进范围随车辆实际位移增长，保留后方绕行段。前视随速度增加、随预瞄曲率缩短并平滑变化，急弯降低远目标权重。同目标持续重规划保留前视、方向滤波和速度状态；停车或换目标时清零。
+- **连续限速与转向响应**：联合路径/转向曲率、角速度上限、横向加速度和终点制动确定速度，并约束候选命令的 `v * abs(w)`。行进角速度按前视圆弧计算；使用连续里程计估计的角速度与 `v3_yaw_response_time` 预估短时航向变化。转向停止角包含响应时间和角减速度，接近对齐前即减小转速；命令或实测转速仍会过转时，正常命令及备选轨迹均禁止纵向加速。大航向误差原地对齐使用独立进入/退出阈值，角度和转速都满足退出条件后才接回前进，`v3_heading_gain` 仅用于原地对齐。到点同时要求 XY 距离与剩余弧长进入容差。
+- **几何斥力与绕行侧**：每个角扇区保留到带余量矩形车身净距最近的障碍，重复点不会叠加放大斥力；全局路径参与选择绕行侧，切向引导与保持时间减少反复换边。势场仅保留相对路径方向的侧向修正，偏转不超过 `v3_obstacle_heading_limit`，防止局部斥力抵消 A* 前向引导而触发左右纠偏。较大绕行仍由 A*、备选轨迹和完整碰撞检查处理。
+- **短轨迹选择**：先检查正常跟踪命令，受阻后才在可达速度窗内按路径进展、偏离、方向、净距和速度变化排序备选短弧线。每个候选均执行完整车身扫掠与实测速度制动检查。扇区压缩只用于引导和评分，碰撞检查仍使用完整近场障碍与静态地图。检查次数或时间预算耗尽且无安全候选时停车；时间预算只在完整检查之间判断，不能保证单周期耗时上限，最终命令仍经过公共发布检查。
 - **停滞恢复**：在 `dynamic_avoidance_mode: astar_replan` 下，持续缺少沿路径进展时请求 A* 重规划，并沿用公共重规划间隔。正常原地转向通过实际航向变化豁免，传感器或定位无效时不累计停滞。
 
 关键参数集中在 [local_planner.yaml](config/local_planner.yaml)，以下只列调参入口；所有 `v3_*` 参数仅 V3 读取。距离为米、时间为秒，V3 角度参数为弧度，区别于 launch 的 `max_wz`（deg/s）。
@@ -60,9 +60,10 @@ APF 关闭通用的 `obstacle_slowdown_enabled`，但保留上述策略内降速
 | 分组 | 代表参数 | 用途 |
 | --- | --- | --- |
 | 前视 | `v3_lookahead_min`、`v3_lookahead_max`、`v3_lookahead_time`、`v3_curvature_preview` | 前视上下限、速度响应和曲率预瞄范围 |
-| 速度与转向 | `v3_lateral_acceleration`、`v3_accel_v`、`v3_accel_w`、`v3_rotate_threshold` | 横向加速度、速度变化率及原地转向阈值 |
+| 速度与转向 | `v3_lateral_acceleration`、`v3_accel_v`、`v3_accel_w`、`v3_rotate_threshold`、`v3_rotate_exit_threshold` | 横向加速度、速度变化率及原地转向进入/退出阈值；退出必须小于进入 |
+| 底盘转向响应 | `v3_yaw_response_time`、`v3_rotate_exit_wz` | 航向预估时间与对齐后允许前进的角速度阈值（rad/s）；角制动限速仍沿用公共碰撞配置 |
 | 终点接近 | `v3_goal_approach_distance` | 终点减速范围；制动减速度沿用公共碰撞配置 |
-| 障碍引导 | `v3_obstacle_influence`、`v3_obstacle_sectors`、`v3_tangent_gain`、`v3_side_hold_time` | 净距作用范围、扇区数、切向引导和绕行侧保持 |
+| 障碍引导 | `v3_obstacle_influence`、`v3_obstacle_sectors`、`v3_tangent_gain`、`v3_side_hold_time`、`v3_obstacle_heading_limit` | 净距作用范围、扇区数、切向引导、绕行侧保持和最大侧向修正角度（rad） |
 | 候选检查 | `v3_trajectory_max_checks`、`v3_trajectory_time_budget` | 完整碰撞检查次数和软时间预算 |
 | 停滞判断 | `v3_stall_time`、`v3_stall_progress` | 观察时长及期间要求的最小沿路径进展 |
 
@@ -119,12 +120,17 @@ bash scripts/ros1.sh rosservice call /path_follower_node/clear_obstacle_memory "
 
 | 字段 | 含义 |
 | --- | --- |
-| `state` | 控制状态，如 `tracking` 跟踪、`rotating` 转向、`trajectory_blocked` 无可用候选、`force_cancelled` 合力抵消、`invalid_input` 输入异常 |
+| `state` | 正常跟踪命令的控制状态，如 `tracking` 跟踪、`rotating` 对齐、`trajectory_blocked` 无可用候选、`force_cancelled` 合力抵消、`invalid_input` 输入异常；受阻时发布的备选轨迹可能不同 |
 | `progress` | 当前路径起点累计弧长（m），接受新路径后重新计算 |
 | `lookahead` | 当前平滑后的前视距离（m） |
 | `clearance` | 势场近场扇区中的最小车身净距（m）；`inf` 表示该范围内无障碍点，不代表全环境无障碍 |
 | `side` | 绕行侧：`1` 左、`-1` 右、`0` 未保持绕行侧 |
 | `accepted` | 本次命令是否被公共发布流程接受，不表示底盘已执行，也不表示输出一定非零 |
+| `heading_error_deg`、`raw_heading_error_deg` | 方向滤波后/前的航向误差（deg），用于区分路径变化与车辆纠偏 |
+| `vx`、`wz_deg` | 最终实际发布的线速度（m/s）与角速度（deg/s）；底盘实测反馈需另行对照 |
+| `yaw_braking` | 命令或实测转速仍会过转，已抑制纵向加速；不表示紧急停车 |
+| `obstacle_correction_deg` | 当前障碍相对路径引导的侧向修正角（deg） |
+| `measured_wz_deg` | 连续里程计差分估计的角速度（deg/s）；不是 CAN 轮速反馈，无差分时回退到上一条命令 |
 
 `V3 path progress stalled; requesting A* plan` 表示沿路径进展不足并已请求重规划；观察 `progress` 是否增长，同时区分正常原地转向与实际受阻。`Vehicle footprint blocked`、`Dynamic obstacle emergency stop`、`Obstacle input stale` 分别表示车身碰撞、近距离急停与数据过期。`Navigation control cycle took ...` 提示计算延迟，下游 `Twist input timed out` 是独立看门狗。排查时先确认原因，不通过重复旧非零命令掩盖超时。
 
@@ -136,4 +142,4 @@ bash scripts/ros1.sh rosservice call /path_follower_node/clear_obstacle_memory "
 python3 -m unittest discover -s src/fw_mid_local_planner/tests -v
 ```
 
-覆盖力/速度计算、障碍投影与记忆、碰撞检查和规划/恢复/发布接口。ROS 传输使用替身，仍需 Noetic 构建、ROS 联调及受控实车验证。
+覆盖力/速度计算、障碍投影与记忆、碰撞检查和规划/恢复/发布接口；闭环回归还包含延迟执行、有限转向响应、墙边轨迹及实际运动扫掠。模拟延迟不能替代底盘实测响应标定。ROS 传输使用替身，仍需 Noetic 构建、ROS 联调及受控实车验证。

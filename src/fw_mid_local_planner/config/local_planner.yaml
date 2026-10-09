@@ -19,29 +19,38 @@ tracking_controller: pid
 
 # V3 独立读取以下参数；classic/APF 不受其影响，速度上限仍来自 launch。
 # 前视按弧长插值；随车速增加、随预瞄曲率缩短，单位米和秒。
-v3_lookahead_min: 0.25
+v3_lookahead_min: 0.45
 v3_lookahead_max: 0.80
 v3_lookahead_time: 1.50
 v3_lookahead_filter_time: 0.30
 v3_curvature_gain: 0.70
-v3_curvature_preview: 1.20
+v3_curvature_preview: 0.60
 # 速度规划同时受角速度、横向加速度及剩余路程制动约束。
 v3_lateral_acceleration: 0.25
 v3_accel_v: 0.25
 v3_accel_w: 0.40
+# 行进角速度按 v * 曲率计算；此增益仅用于原地对齐。
 v3_heading_gain: 1.80
-v3_rotate_threshold: 0.90
+# 实测角速度预估短时航向变化，并计入转向停止角；单位秒。
+v3_yaw_response_time: 0.35
+# 原地转向进入/退出阈值（rad），滞回避免中等转角反复停走。
+v3_rotate_threshold: 1.35
+v3_rotate_exit_threshold: 0.45
+# 对齐后先减小实测/命令转速，再接回前行；单位 rad/s。
+v3_rotate_exit_wz: 0.15
 v3_goal_approach_distance: 0.60
 # 斥力按矩形车身净距和固定角扇区积分，不随同一面墙的重复点数增加。
 v3_obstacle_influence: 0.65
 v3_repulsive_gain: 1.50
 v3_tangent_gain: 0.80
+# 障碍仅修正路径侧向引导，最大偏转 rad；完整碰撞检查使用原始障碍。
+v3_obstacle_heading_limit: 0.20
 v3_obstacle_sectors: 36
 v3_side_hold_time: 1.0
 v3_force_filter_time: 0.15
 v3_deadband_v: 0.005
 v3_deadband_w: 0.010
-# 短轨迹按评分顺序复用足迹/制动检查；达到预算后无可用候选即停车。
+# 先检查正常跟踪命令，受阻后按评分顺序检查备选轨迹；无安全候选即停车。
 # 时间预算在每次完整检查之间判断，不中断一次已开始的碰撞查询。
 v3_trajectory_max_checks: 9
 v3_trajectory_time_budget: 0.04
